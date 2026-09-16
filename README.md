@@ -32,6 +32,7 @@ The application code is written in C++17, without heap allocation, exceptions or
 ## How it works
 
 ```mermaid
+%%{init: {"sequence": {"mirrorActors": false}}}%%
 sequenceDiagram
     participant RTC as DS3231
     participant MCU as STM32L073
