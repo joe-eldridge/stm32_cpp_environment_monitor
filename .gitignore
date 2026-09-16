@@ -4,3 +4,6 @@ mx.scratch
 
 # macOS
 .DS_Store
+
+# Editor state - rewritten by the STM32Cube clangd extension
+.clangd
