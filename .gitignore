@@ -1,0 +1,6 @@
+build
+mx.scratch
+!.settings
+
+# macOS
+.DS_Store

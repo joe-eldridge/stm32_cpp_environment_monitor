@@ -1,0 +1,10 @@
+{
+  "source": {
+    "sourceType": "STM32CubeMX"
+  },
+  "board": "NUCLEO-L073RZ",
+  "device": "STM32L073RZT3",
+  "core": "Cortex-M0+",
+  "order": 0,
+  "toolchain": "GCC"
+}
