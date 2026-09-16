@@ -5,11 +5,13 @@
 #include <optional>
 
 #include "bme280.hpp"
+#include "build_config.hpp"
 #include "ds3231.hpp"
 #include "fat_time.hpp"
 #include "fatfs.h"
 #include "i2c_bus.hpp"
 #include "i2c_fault_injection.hpp"
+#include "low_power.hpp"
 #include "main.h"
 #include "time_sync.hpp"
 #include "veml7700.hpp"
@@ -40,7 +42,7 @@ static_assert(Ds3231::IsValidWakeInterval(kWakeIntervalMinutes), "wake interval 
 // FatFs only calls it from within this thread's f_* calls - never from an ISR.
 Ds3231 *g_fatTimeRtc = nullptr;
 
-// TEMPORARY: small diagnostic helpers for the sleep/wake test.
+// Blocking UART output, used for one-off boot messages.
 void SendLine(const char *message)
 {
   HAL_UART_Transmit(&huart2, reinterpret_cast<const uint8_t *>(message),
@@ -71,13 +73,32 @@ void SendDecimal(std::int32_t value)
   }
 }
 
+// Per-wake diagnostics. At 9600 baud each character keeps the MCU awake for
+// about 1 ms, and a wake prints around 70 of them, so Release builds drop
+// these. Boot-time messages use SendLine() directly and always print.
+void WakeLog(const char *message)
+{
+  if (kDebugBuild)
+  {
+    SendLine(message);
+  }
+}
+
+void WakeLogDecimal(std::int32_t value)
+{
+  if (kDebugBuild)
+  {
+    SendDecimal(value);
+  }
+}
+
 constexpr const char *kLogFileName = "LOG.CSV";
 constexpr const char *kLogHeader =
     "Timestamp,TemperatureCentiC,PressureCentiHpa,HumidityCentiPct,LuxCenti,LuxSaturated\n";
 
 // Appends one CSV row for this wake cycle: an RTC timestamp plus whichever
 // sensor readings succeeded (blank field if a sensor read failed). Logging
-// failures (SD not mounted, write error) are reported over UART but not
+// failures (SD not mounted, write error) are reported in the wake log but not
 // fatal - sensor sampling and the sleep/wake cycle continue regardless,
 // since a lost log entry shouldn't stop the device monitoring.
 void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measurements,
@@ -86,7 +107,7 @@ void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measureme
   const std::optional<Ds3231::DateTime> dt = rtc.ReadDateTime();
   if (!dt)
   {
-    SendLine(" LogSkipped(rtc)");
+    WakeLog(" LogSkipped(rtc)");
     return;
   }
 
@@ -103,9 +124,9 @@ void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measureme
   }
   if (result != FR_OK)
   {
-    SendLine(" LogSkipped(open, FRESULT ");
-    SendDecimal(result);
-    SendLine(")");
+    WakeLog(" LogSkipped(open, FRESULT ");
+    WakeLogDecimal(result);
+    WakeLog(")");
     return;
   }
 
@@ -141,12 +162,12 @@ void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measureme
   result = f_close(&file);
   if (result != FR_OK)
   {
-    SendLine(" LogFailed(close, FRESULT ");
-    SendDecimal(result);
-    SendLine(")");
+    WakeLog(" LogFailed(close, FRESULT ");
+    WakeLogDecimal(result);
+    WakeLog(")");
     return;
   }
-  SendLine(" Logged");
+  WakeLog(" Logged");
 }
 
 } // namespace
@@ -167,6 +188,8 @@ std::uint32_t AppGetFatTime()
 
 void AppMain()
 {
+  low_power::ConfigureStopMode();
+
   // Pins as configured by MX_I2C1_Init(): PB8 = SCL, PB9 = SDA.
   const I2cBus::Pin i2c1Scl{GPIOB, LL_GPIO_PIN_8};
   const I2cBus::Pin i2c1Sda{GPIOB, LL_GPIO_PIN_9};
@@ -252,9 +275,7 @@ void AppMain()
 
   for (;;)
   {
-    // TEMPORARY: confirms the loop reaches Stop-mode entry each cycle,
-    // before anything about the sleep/wake mechanism itself is trusted.
-    SendLine("\r\nSleeping...");
+    WakeLog("\r\nSleeping...");
 
     // SysTick (HCLK-derived) has no clock source once the core stops in
     // Stop mode - suspending it first avoids it silently missing ticks
@@ -276,39 +297,38 @@ void AppMain()
       HaltWithError();
     }
 
-    // TEMPORARY: proof of a successful wake cycle for testing.
-    SendLine("\r\nWoke #");
-    SendDecimal(static_cast<std::int32_t>(wakeCount++));
-    SendLine(" ");
+    WakeLog("\r\nWoke #");
+    WakeLogDecimal(static_cast<std::int32_t>(wakeCount++));
+    WakeLog(" ");
 
     const std::optional<Bme280::Measurements> measurements = bme280.Read();
     if (measurements)
     {
-      SendLine("T=");
-      SendDecimal(measurements->temperatureCenti);
-      SendLine(" P=");
-      SendDecimal(measurements->pressureCentiHpa);
-      SendLine(" H=");
-      SendDecimal(measurements->humidityCentiPct);
+      WakeLog("T=");
+      WakeLogDecimal(measurements->temperatureCenti);
+      WakeLog(" P=");
+      WakeLogDecimal(measurements->pressureCentiHpa);
+      WakeLog(" H=");
+      WakeLogDecimal(measurements->humidityCentiPct);
     }
     else
     {
-      SendLine("BME280 read failed");
+      WakeLog("BME280 read failed");
     }
 
     const std::optional<Veml7700::Reading> light = veml7700.Read();
     if (light)
     {
-      SendLine(" Lux=");
-      SendDecimal(light->luxCenti);
+      WakeLog(" Lux=");
+      WakeLogDecimal(light->luxCenti);
       if (light->saturated)
       {
-        SendLine("(saturated)");
+        WakeLog("(saturated)");
       }
     }
     else
     {
-      SendLine(" VEML7700 read failed");
+      WakeLog(" VEML7700 read failed");
     }
 
     LogRecord(rtc, measurements, light);

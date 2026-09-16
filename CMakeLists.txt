@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/app.cpp
     Core/Src/time_sync.cpp
     Core/Src/i2c_fault_injection.cpp
+    Core/Src/low_power.cpp
     Drivers/BSP/Components/ds3231/ds3231.cpp
     Drivers/BSP/Components/bme280/bme280.cpp
     Drivers/BSP/Components/veml7700/veml7700.cpp
