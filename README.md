@@ -14,7 +14,7 @@ The application code is written in C++17, without heap allocation, exceptions or
 | DS3231 RTC (HW-084 board) | Timekeeping and wake-up alarm | I2C `0x68`, alarm on SQW/INT |
 | Bosch BME280 (Adafruit board) | Temperature, pressure, humidity | I2C `0x77` |
 | Vishay VEML7700 (Adafruit board) | Ambient light | I2C `0x10` |
-| Adafruit 1.54" eInk (SSD1681, 200×200) with microSD slot and SPI SRAM | Display *(in progress)* and log storage | SPI |
+| Adafruit 1.54" eInk (SSD1681, 200×200, original revision) with microSD slot and SPI SRAM | Display *(in progress)* and log storage | SPI |
 
 ### Pin assignments
 
