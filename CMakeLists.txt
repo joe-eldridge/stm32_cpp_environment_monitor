@@ -59,6 +59,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BSP/Components/util/spi_bus.cpp
     Drivers/BSP/Components/sdcard/sdcard.cpp
     Drivers/BSP/Components/sdcard/sdcard_diskio.cpp
+    Drivers/BSP/Components/display/ssd1681.cpp
+    Drivers/BSP/Components/graphics/mono_framebuffer.cpp
 )
 
 # C++ hot-path/bare-metal build: no exception unwind tables, no RTTI
@@ -73,6 +75,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BSP/Components/veml7700
     Drivers/BSP/Components/util
     Drivers/BSP/Components/sdcard
+    Drivers/BSP/Components/display
+    Drivers/BSP/Components/graphics
 )
 
 # Add project symbols (macros)

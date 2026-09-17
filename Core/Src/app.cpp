@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -7,12 +8,16 @@
 #include "bme280.hpp"
 #include "build_config.hpp"
 #include "ds3231.hpp"
+#include "epaper_display.hpp"
 #include "fat_time.hpp"
 #include "fatfs.h"
 #include "i2c_bus.hpp"
+#include "hal_gpio_pin.hpp"
 #include "i2c_fault_injection.hpp"
 #include "low_power.hpp"
 #include "main.h"
+#include "mono_framebuffer.hpp"
+#include "spi_bus.hpp"
 #include "time_sync.hpp"
 #include "veml7700.hpp"
 
@@ -37,6 +42,14 @@ namespace
 // cycle can be observed in about a minute during testing rather than five.
 constexpr std::uint8_t kWakeIntervalMinutes = 1;
 static_assert(Ds3231::IsValidWakeInterval(kWakeIntervalMinutes), "wake interval must divide 60 evenly");
+
+// A full refresh clears the ghosting partial refreshes leave behind. With a
+// 1-minute wake interval this is once an hour.
+constexpr std::uint32_t kWakesPerFullRefresh = 60;
+
+// The display framebuffer: 5 KB, static so it isn't on the 1 KB stack.
+std::array<std::uint8_t, Ssd1681::kImageBytes> g_frame{};
+static_assert(MonoFramebuffer::BufferSize(Ssd1681::kWidth, Ssd1681::kHeight) == Ssd1681::kImageBytes);
 
 // Set once the RTC is up, so FatFs's get_fattime() hook can timestamp files.
 // FatFs only calls it from within this thread's f_* calls - never from an ISR.
@@ -170,6 +183,39 @@ void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measureme
   WakeLog(" Logged");
 }
 
+// TEMPORARY display test screen, until the real screens exist. The border
+// and cross are static; the eight squares show the wake count in binary
+// (most significant bit on the left), so each wake changes a few pixels
+// through a partial refresh.
+void DrawTestScreen(MonoFramebuffer &canvas, std::uint32_t wakeCount)
+{
+  const int width = canvas.Width();
+  const int height = canvas.Height();
+  canvas.Fill(Color::White);
+  canvas.Rect(0, 0, width, height, Color::Black);
+  canvas.Rect(3, 3, width - 6, height - 6, Color::Black);
+
+  canvas.Rect(50, 30, 100, 100, Color::Black);
+  canvas.Line(50, 30, 149, 129, Color::Black);
+  canvas.Line(149, 30, 50, 129, Color::Black);
+
+  constexpr int kSquare = 18;
+  constexpr int kPitch = 21;
+  const int left = (width - (8 * kPitch - (kPitch - kSquare))) / 2;
+  for (int bit = 0; bit < 8; ++bit)
+  {
+    const int x = left + (7 - bit) * kPitch;
+    if ((wakeCount >> bit) & 1u)
+    {
+      canvas.FillRect(x, 160, kSquare, kSquare, Color::Black);
+    }
+    else
+    {
+      canvas.Rect(x, 160, kSquare, kSquare, Color::Black);
+    }
+  }
+}
+
 } // namespace
 
 std::uint32_t AppGetFatTime()
@@ -262,6 +308,24 @@ void AppMain()
     HaltWithError();
   }
 
+  SpiBus einkSpi(SPI1, eInk_CS_GPIO_Port, eInk_CS_Pin);
+  HalOutputPin einkDataCommand(eInk_D_C_GPIO_Port, eInk_D_C_Pin);
+  HalOutputPin einkReset(eInk_RST_GPIO_Port, eInk_RST_Pin);
+  HalInputPin einkBusy(eInk_BUSY_GPIO_Port, eInk_BUSY_Pin);
+  Ssd1681 panel(einkSpi, einkDataCommand, einkReset, einkBusy);
+  MonoFramebuffer canvas(g_frame.data(), Ssd1681::kWidth, Ssd1681::kHeight);
+  EpaperDisplay display(panel, canvas);
+
+  std::uint32_t wakeCount = 0;
+
+  // First update is always a full refresh, clearing whatever the panel
+  // showed before this boot. A failure isn't fatal: logging carries on.
+  if (!display.Update(Ssd1681::RefreshMode::Full,
+                      [](MonoFramebuffer &c) { DrawTestScreen(c, 0); }))
+  {
+    SendLine("\r\nDisplay update failed");
+  }
+
   MX_FATFS_Init();
   if (f_mount(&USERFatFS, USERPath, 1) != FR_OK)
   {
@@ -270,8 +334,6 @@ void AppMain()
     // starts by itself once a card is inserted.
     SendLine("\r\nSD mount failed - will retry each wake");
   }
-
-  std::uint32_t wakeCount = 0;
 
   for (;;)
   {
@@ -297,8 +359,9 @@ void AppMain()
       HaltWithError();
     }
 
+    ++wakeCount;
     WakeLog("\r\nWoke #");
-    WakeLogDecimal(static_cast<std::int32_t>(wakeCount++));
+    WakeLogDecimal(static_cast<std::int32_t>(wakeCount));
     WakeLog(" ");
 
     const std::optional<Bme280::Measurements> measurements = bme280.Read();
@@ -333,7 +396,12 @@ void AppMain()
 
     LogRecord(rtc, measurements, light);
 
-    // TODO: refresh the eInk display once per hour.
+    const Ssd1681::RefreshMode mode = (wakeCount % kWakesPerFullRefresh == 0) ? Ssd1681::RefreshMode::Full
+                                                                               : Ssd1681::RefreshMode::Partial;
+    if (!display.Update(mode, [wakeCount](MonoFramebuffer &c) { DrawTestScreen(c, wakeCount); }))
+    {
+      WakeLog(" DisplayFailed");
+    }
 
     if (!rtc.ScheduleNextAlarm(kWakeIntervalMinutes))
     {

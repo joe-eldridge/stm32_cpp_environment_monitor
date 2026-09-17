@@ -14,7 +14,7 @@ The application code is written in C++17, without heap allocation, exceptions or
 | DS3231 RTC (HW-084 board) | Timekeeping and wake-up alarm | I2C `0x68`, alarm on SQW/INT |
 | Bosch BME280 (Adafruit board) | Temperature, pressure, humidity | I2C `0x77` |
 | Vishay VEML7700 (Adafruit board) | Ambient light | I2C `0x10` |
-| Adafruit 1.54" eInk (SSD1681, 200×200, original revision) with microSD slot and SPI SRAM | Display *(in progress)* and log storage | SPI |
+| Adafruit 1.54" eInk (SSD1681, 200×200, original revision) with microSD slot and SPI SRAM | Display and log storage | SPI |
 
 ### Pin assignments
 
@@ -38,12 +38,14 @@ sequenceDiagram
     participant MCU as STM32L073
     participant S as BME280 / VEML7700
     participant SD as SD card
+    participant EPD as SSD1681 eInk
     MCU->>RTC: Arm alarm for next interval
     Note over MCU: Stop mode (low-power regulator)
     RTC-->>MCU: SQW/INT falls → EXTI wake
     MCU->>MCU: Restore clocks, clear alarm flag
     MCU->>S: Power up, take one measurement, power down
     MCU->>SD: Append CSV row (timestamped from the RTC)
+    MCU->>EPD: Wake, partial refresh (full once an hour), deep sleep
     MCU->>RTC: Arm next alarm
 ```
 
@@ -71,6 +73,8 @@ sequenceDiagram
 - **SD card swaps:** the card can be removed and reinserted while running. A failed transfer marks the card uninitialised, and the next write re-initialises and re-mounts it. This needed a workaround for ST's FatFs glue, which caches `disk_initialize()` even when it fails; see [user_diskio.c](FATFS/Target/user_diskio.c).
 - **Shared SPI bus:** scope guards (RAII) always restore the bus speed and release chip-select, even on error paths.
 
+**Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. A partial refresh needs the image currently on the panel as a reference. `EpaperDisplay` uses its single 5 KB framebuffer for that: it uploads the framebuffer as the reference *before* the new frame is drawn into it, so only one image buffer is needed in the 20 KB of RAM. The first update after boot, and any update after a failure, is promoted to a full refresh, since the panel's contents can't be trusted then.
+
 **Sensor accuracy.**
 - **BME280:** uses Bosch's integer compensation formulas, with signed calibration values handled as in Bosch's reference driver.
 - **VEML7700:** uses the 0.0672 lx/count resolution from Vishay's current application note ([84323, rev. 06-Mar-2025](https://www.vishay.com/docs/84323/designingveml7700.pdf)); the original datasheet value reads about 14% low. Readings at full scale are flagged as saturated.
@@ -91,6 +95,9 @@ Coverage includes:
 - the BME280 against Bosch's worked example, and against the datasheet's floating-point formulas across several calibrations,
 - DS3231 alarm scheduling at interval boundaries, including the window where an alarm write could land too late,
 - VEML7700 power sequencing, scaling and saturation,
+- SSD1681 command sequences, refresh modes and BUSY handling, against a recording SPI fake,
+- the e-paper update cycle: reference-image ordering, forced full refreshes, and sleeping after failures,
+- framebuffer drawing: pixel layout, clipping, rectangles and lines in every direction,
 - SD card capacity parsing from the CSD register,
 - FatFs timestamp packing,
 - timeout behaviour across tick wraparound.
@@ -129,7 +136,8 @@ The output is `build/Release/stm32_cpp_environment_monitor.elf`. Open the ST-LIN
 
 ```
 Core/                     Application (app.cpp), CubeMX init code, fault-injection hook
-Drivers/BSP/Components/   Project drivers: bme280, ds3231, veml7700, sdcard, util (buses, timing)
+Drivers/BSP/Components/   Project drivers: bme280, ds3231, veml7700, sdcard, display (SSD1681),
+                          graphics (framebuffer), util (buses, pins, timing)
 Drivers/CMSIS, Drivers/STM32L0xx_HAL_Driver   ST vendor code
 FATFS/, Middlewares/      FatFs and its glue to the SD card driver
 tests/                    Host unit tests and fakes
@@ -143,7 +151,9 @@ tests/                    Host unit tests and fakes
 - [x] SD card logging with removal and reinsertion recovery
 - [x] I2C bus recovery with on-target fault injection
 - [x] CI: unit tests and firmware builds
-- [ ] SSD1681 eInk driver: hourly averages, trend plot, button menu (set time, eject and format the SD card)
+- [x] SSD1681 eInk driver with full and partial refresh (showing a test screen for now)
+- [ ] Display screens: text rendering, hourly averages, trend plot
+- [ ] Button menu: set time, eject and format the SD card
 - [ ] Current-consumption measurements and battery-life estimate
 - [ ] Production wake interval: currently 1 minute for testing, with 5 minutes planned
 - [ ] Hardware changes to the HW-084 RTC board (power LED, charging circuit)
