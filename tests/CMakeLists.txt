@@ -48,6 +48,8 @@ add_library(drivers STATIC
     ${COMPONENTS}/bme280/bme280.cpp
     ${COMPONENTS}/ds3231/ds3231.cpp
     ${COMPONENTS}/veml7700/veml7700.cpp
+    ${COMPONENTS}/display/ssd1681.cpp
+    ${COMPONENTS}/graphics/mono_framebuffer.cpp
 )
 target_include_directories(drivers PUBLIC
     ${COMPONENTS}/util
@@ -55,6 +57,8 @@ target_include_directories(drivers PUBLIC
     ${COMPONENTS}/ds3231
     ${COMPONENTS}/veml7700
     ${COMPONENTS}/sdcard
+    ${COMPONENTS}/display
+    ${COMPONENTS}/graphics
     ${FIRMWARE_ROOT}/Core/Inc
 )
 target_link_libraries(drivers PRIVATE project_warnings project_sanitizers)
@@ -65,7 +69,10 @@ add_executable(unit_tests
     test_bme280.cpp
     test_csd.cpp
     test_ds3231.cpp
+    test_epaper_display.cpp
     test_fat_time.cpp
+    test_mono_framebuffer.cpp
+    test_ssd1681.cpp
     test_timeout.cpp
     test_veml7700.cpp
 )

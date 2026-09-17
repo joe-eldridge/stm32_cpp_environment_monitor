@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "spi_device.hpp"
 #include "stm32l0xx_hal.h"
 #include "stm32l0xx_ll_spi.h"
 
@@ -9,7 +10,7 @@
 // Unlike I2cBus, SPI has no bus-level addressing - each device on the shared
 // SPI1 bus (eInk, SRAM, SD card) gets its own SpiBus instance pointed at its
 // own CS pin, but all instances share the same underlying SPI1 peripheral.
-class SpiBus
+class SpiBus final : public SpiDevice
 {
 public:
   SpiBus(SPI_TypeDef *spi, GPIO_TypeDef *csPort, std::uint16_t csPin);
@@ -48,6 +49,9 @@ public:
   // Full-duplex byte transfer. Times out rather than spinning forever if the
   // SPI peripheral's flags never set (e.g. a clock misconfiguration).
   [[nodiscard]] bool TransferByte(std::uint8_t txByte, std::uint8_t &rxByte);
+
+  // SpiDevice: one chip-select-framed write, e.g. a display command or image.
+  [[nodiscard]] bool Write(const std::uint8_t *data, std::size_t length) override;
 
 private:
   void SetPrescaler(std::uint32_t prescaler);

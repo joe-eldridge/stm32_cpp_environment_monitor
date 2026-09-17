@@ -1,0 +1,89 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+#include "gpio_pin.hpp"
+#include "spi_device.hpp"
+
+// Driver for the Solomon Systech SSD1681 e-paper controller, as used on
+// Adafruit's 1.54" 200x200 monochrome breakout. Command values and the
+// operating sequence follow the SSD1681 datasheet (rev 0.13); the panel
+// geometry settings match Adafruit's driver for this breakout.
+//
+// Images are 1 bit per pixel, 1 = white, MSB leftmost, rows top to bottom -
+// the layout MonoFramebuffer produces.
+class Ssd1681
+{
+public:
+  static constexpr std::uint16_t kWidth = 200;
+  static constexpr std::uint16_t kHeight = 200;
+  static constexpr std::size_t kImageBytes = ((kWidth + 7u) / 8u) * kHeight;
+
+  enum class RefreshMode : std::uint8_t
+  {
+    // Whole-panel waveform: slow (seconds), flashes, clears ghosting.
+    Full,
+    // Only changed pixels are driven, using the previous image in RED RAM as
+    // the reference. Fast and flicker-free, but ghosting builds up.
+    Partial,
+  };
+
+  Ssd1681(SpiDevice &spi, OutputPin &dataCommand, OutputPin &reset, InputPin &busy);
+
+  // Hardware reset (which is also the only way out of deep sleep), software
+  // reset, then panel configuration. Leaves the controller awake.
+  [[nodiscard]] bool Wake();
+
+  // The image to show on the next refresh (BW RAM, command 0x24).
+  [[nodiscard]] bool WriteImage(const std::uint8_t *image);
+
+  // The image currently on the panel (RED RAM, command 0x26). A partial
+  // refresh drives only the pixels that differ between the two.
+  [[nodiscard]] bool WritePreviousImage(const std::uint8_t *image);
+
+  // Drives the panel and blocks until the controller reports it's done.
+  [[nodiscard]] bool Refresh(RefreshMode mode);
+
+  // Deep sleep mode 1: about 1 uA, RAM contents kept. Only Wake() exits it.
+  [[nodiscard]] bool Sleep();
+
+private:
+  [[nodiscard]] bool Command(std::uint8_t command);
+  [[nodiscard]] bool Command(std::uint8_t command, const std::uint8_t *data, std::size_t length);
+  [[nodiscard]] bool WriteRam(std::uint8_t ramCommand, const std::uint8_t *image);
+  [[nodiscard]] bool WaitUntilIdle(std::uint32_t timeoutMs);
+
+  static constexpr std::uint8_t kCmdDriverOutputControl = 0x01;
+  static constexpr std::uint8_t kCmdDeepSleepMode = 0x10;
+  static constexpr std::uint8_t kCmdDataEntryMode = 0x11;
+  static constexpr std::uint8_t kCmdSoftwareReset = 0x12;
+  static constexpr std::uint8_t kCmdTemperatureSensor = 0x18;
+  static constexpr std::uint8_t kCmdMasterActivation = 0x20;
+  static constexpr std::uint8_t kCmdDisplayUpdateControl2 = 0x22;
+  static constexpr std::uint8_t kCmdWriteBlackWhiteRam = 0x24;
+  static constexpr std::uint8_t kCmdWriteRedRam = 0x26;
+  static constexpr std::uint8_t kCmdBorderWaveform = 0x3C;
+  static constexpr std::uint8_t kCmdRamXWindow = 0x44;
+  static constexpr std::uint8_t kCmdRamYWindow = 0x45;
+  static constexpr std::uint8_t kCmdRamXCounter = 0x4E;
+  static constexpr std::uint8_t kCmdRamYCounter = 0x4F;
+
+  // 0x22 sequences: clock + analog on, load temperature, display with
+  // DISPLAY Mode 1 (full) or Mode 2 (partial), then analog + oscillator off.
+  static constexpr std::uint8_t kUpdateFull = 0xF7;
+  static constexpr std::uint8_t kUpdatePartial = 0xFF;
+  static constexpr std::uint8_t kDeepSleepMode1 = 0x01;
+
+  // Datasheet operation flow: 10 ms after power-on / reset steps.
+  static constexpr std::uint32_t kResetStepMs = 10;
+  static constexpr std::uint32_t kBusyPollMs = 10;
+  static constexpr std::uint32_t kResetTimeoutMs = 1000;
+  // A full refresh takes a few seconds; this only bounds a stuck BUSY line.
+  static constexpr std::uint32_t kRefreshTimeoutMs = 10000;
+
+  SpiDevice &spi_;
+  OutputPin &dataCommand_;
+  OutputPin &reset_;
+  InputPin &busy_;
+};

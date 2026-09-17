@@ -9,6 +9,13 @@ SpiBus::SpiBus(SPI_TypeDef *spi, GPIO_TypeDef *csPort, std::uint16_t csPin)
 
 void SpiBus::Select()
 {
+  // MX_SPI1_Init() configures SPI1 but leaves it disabled (SPE=0), and a
+  // disabled SPI never clocks anything out. Enable it here rather than rely
+  // on some other device's code (the SD card's speed change) running first.
+  if (!LL_SPI_IsEnabled(spi_))
+  {
+    LL_SPI_Enable(spi_);
+  }
   HAL_GPIO_WritePin(csPort_, csPin_, GPIO_PIN_RESET);
 }
 
@@ -60,4 +67,19 @@ bool SpiBus::TransferByte(std::uint8_t txByte, std::uint8_t &rxByte)
   }
   rxByte = LL_SPI_ReceiveData8(spi_);
   return true;
+}
+
+bool SpiBus::Write(const std::uint8_t *data, std::size_t length)
+{
+  Select();
+  bool ok = true;
+  std::uint8_t discarded;
+  for (std::size_t i = 0; i < length && ok; ++i)
+  {
+    // Full duplex: reading each byte back keeps RXNE clear, so no overrun
+    // is left behind for the next device on the bus (the SD card reads).
+    ok = TransferByte(data[i], discarded);
+  }
+  Deselect();
+  return ok;
 }
