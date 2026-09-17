@@ -49,6 +49,8 @@ add_library(drivers STATIC
     ${COMPONENTS}/ds3231/ds3231.cpp
     ${COMPONENTS}/veml7700/veml7700.cpp
     ${COMPONENTS}/display/ssd1681.cpp
+    ${COMPONENTS}/input/rotary_encoder.cpp
+    ${COMPONENTS}/input/button.cpp
     ${COMPONENTS}/graphics/mono_framebuffer.cpp
     ${COMPONENTS}/graphics/text.cpp
     ${COMPONENTS}/graphics/font_5x7.cpp
@@ -56,6 +58,8 @@ add_library(drivers STATIC
     ${FIRMWARE_ROOT}/Core/Src/main_screen.cpp
     ${FIRMWARE_ROOT}/Core/Src/hourly_history.cpp
     ${FIRMWARE_ROOT}/Core/Src/trend_screen.cpp
+    ${FIRMWARE_ROOT}/Core/Src/menu.cpp
+    ${FIRMWARE_ROOT}/Core/Src/menu_screen.cpp
 )
 target_include_directories(drivers PUBLIC
     ${COMPONENTS}/util
@@ -65,6 +69,7 @@ target_include_directories(drivers PUBLIC
     ${COMPONENTS}/sdcard
     ${COMPONENTS}/display
     ${COMPONENTS}/graphics
+    ${COMPONENTS}/input
     ${FIRMWARE_ROOT}/Core/Inc
 )
 target_link_libraries(drivers PRIVATE project_warnings project_sanitizers)
@@ -73,13 +78,17 @@ add_executable(unit_tests
     support/fake_hal.cpp
     test_bcd.cpp
     test_bme280.cpp
+    test_button.cpp
     test_csd.cpp
     test_ds3231.cpp
     test_epaper_display.cpp
     test_fat_time.cpp
     test_hourly_history.cpp
     test_main_screen.cpp
+    test_menu.cpp
+    test_menu_screen.cpp
     test_mono_framebuffer.cpp
+    test_rotary_encoder.cpp
     test_ssd1681.cpp
     test_text.cpp
     test_text_format.cpp

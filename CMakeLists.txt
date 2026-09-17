@@ -60,6 +60,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BSP/Components/sdcard/sdcard.cpp
     Drivers/BSP/Components/sdcard/sdcard_diskio.cpp
     Drivers/BSP/Components/display/ssd1681.cpp
+    Drivers/BSP/Components/input/rotary_encoder.cpp
+    Drivers/BSP/Components/input/button.cpp
     Drivers/BSP/Components/graphics/mono_framebuffer.cpp
     Drivers/BSP/Components/graphics/text.cpp
     Drivers/BSP/Components/graphics/font_5x7.cpp
@@ -67,6 +69,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/main_screen.cpp
     Core/Src/hourly_history.cpp
     Core/Src/trend_screen.cpp
+    Core/Src/menu.cpp
+    Core/Src/menu_screen.cpp
 )
 
 # C++ hot-path/bare-metal build: no exception unwind tables, no RTTI
@@ -83,6 +87,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BSP/Components/sdcard
     Drivers/BSP/Components/display
     Drivers/BSP/Components/graphics
+    Drivers/BSP/Components/input
 )
 
 # Add project symbols (macros)

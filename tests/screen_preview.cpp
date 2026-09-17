@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "main_screen.hpp"
+#include "menu_screen.hpp"
 #include "ssd1681.hpp"
 #include "trend_screen.hpp"
 
@@ -130,6 +131,43 @@ int main(int argc, char **argv)
   for (const auto &screen : mainScreens)
   {
     DrawMainScreen(canvas, screen.data);
+    const std::string path = directory + "/" + screen.name + ".pbm";
+    if (!WritePbm(path, canvas))
+    {
+      std::fprintf(stderr, "failed to write %s\n", path.c_str());
+      return 1;
+    }
+    std::printf("wrote %s\n", path.c_str());
+  }
+
+  // The menu, one view per state.
+  Menu menu;
+  menu.Open(Ds3231::DateTime{2026, 9, 17, 14, 35, 0});
+  const MenuView menuList = menu.View();
+
+  menu.Update(0, Button::Event::Click); // Set time
+  const MenuView menuTimeEdit = menu.View();
+
+  menu.Update(0, Button::Event::LongPress);
+  menu.Update(2, Button::Event::None); // Format card
+  menu.Update(0, Button::Event::Click);
+  const MenuView menuConfirm = menu.View();
+
+  menu.Complete("Card ejected");
+  const MenuView menuMessage = menu.View();
+
+  const struct
+  {
+    const char *name;
+    const MenuView &view;
+  } menuScreens[] = {{"menu_list", menuList},
+                     {"menu_set_time", menuTimeEdit},
+                     {"menu_confirm", menuConfirm},
+                     {"menu_message", menuMessage}};
+
+  for (const auto &screen : menuScreens)
+  {
+    DrawMenuScreen(canvas, screen.view);
     const std::string path = directory + "/" + screen.name + ".pbm";
     if (!WritePbm(path, canvas))
     {
