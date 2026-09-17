@@ -79,3 +79,36 @@ TEST(TextFormat, DayOfWeek)
   EXPECT_EQ(text_format::DayOfWeek(2026, 0, 1), -1);
   EXPECT_EQ(text_format::DayOfWeek(2026, 13, 1), -1);
 }
+
+TEST(TextFormatCopy, CopiesAndTerminates)
+{
+  char out[8] = "xxxxxxx";
+  text_format::Copy(out, sizeof(out), "abc");
+  EXPECT_STREQ(out, "abc");
+}
+
+TEST(TextFormatCopy, TruncatesRatherThanOverrunning)
+{
+  char out[4];
+  text_format::Copy(out, sizeof(out), "abcdef");
+  EXPECT_STREQ(out, "abc");
+}
+
+TEST(TextFormatAppend, AppendsToWhatIsAlreadyThere)
+{
+  char out[8];
+  text_format::Copy(out, sizeof(out), "ab");
+  text_format::Append(out, sizeof(out), "cd");
+  EXPECT_STREQ(out, "abcd");
+}
+
+TEST(TextFormatAppend, StopsAtTheEndOfTheBuffer)
+{
+  char out[5];
+  text_format::Copy(out, sizeof(out), "abc");
+  text_format::Append(out, sizeof(out), "defgh");
+  EXPECT_STREQ(out, "abcd");
+  // A full buffer takes nothing more.
+  text_format::Append(out, sizeof(out), "i");
+  EXPECT_STREQ(out, "abcd");
+}

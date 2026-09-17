@@ -17,6 +17,11 @@ bool Centi(char *out, std::size_t size, std::int32_t centi, int decimals);
 // Writes `value` (0-99) as two digits with a leading zero: 7 -> "07".
 void TwoDigits(char *out, std::uint8_t value);
 
+// Screen text is built in fixed-size buffers, so these truncate rather than
+// overrun, and always leave `out` NUL-terminated.
+void Copy(char *out, std::size_t size, const char *text);
+void Append(char *out, std::size_t size, const char *text);
+
 // Day of the week for a Gregorian date: 0 = Sunday ... 6 = Saturday.
 // Returns -1 for an invalid month.
 int DayOfWeek(int year, int month, int day);

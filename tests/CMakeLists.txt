@@ -54,6 +54,8 @@ add_library(drivers STATIC
     ${COMPONENTS}/graphics/font_5x7.cpp
     ${FIRMWARE_ROOT}/Core/Src/text_format.cpp
     ${FIRMWARE_ROOT}/Core/Src/main_screen.cpp
+    ${FIRMWARE_ROOT}/Core/Src/hourly_history.cpp
+    ${FIRMWARE_ROOT}/Core/Src/trend_screen.cpp
 )
 target_include_directories(drivers PUBLIC
     ${COMPONENTS}/util
@@ -75,12 +77,14 @@ add_executable(unit_tests
     test_ds3231.cpp
     test_epaper_display.cpp
     test_fat_time.cpp
+    test_hourly_history.cpp
     test_main_screen.cpp
     test_mono_framebuffer.cpp
     test_ssd1681.cpp
     test_text.cpp
     test_text_format.cpp
     test_timeout.cpp
+    test_trend_screen.cpp
     test_veml7700.cpp
 )
 target_include_directories(unit_tests PRIVATE support)

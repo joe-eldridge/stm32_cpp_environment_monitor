@@ -1,7 +1,5 @@
 #include "main_screen.hpp"
 
-#include <cstring>
-
 #include "font_5x7.hpp"
 #include "text.hpp"
 #include "text_format.hpp"
@@ -16,28 +14,11 @@ constexpr const char *kMonthNames[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 constexpr const char kMissingDecimal[] = "--.-";
 constexpr const char kMissingInteger[] = "--";
 
-// Appends `suffix` to the NUL-terminated string in `out`, truncating to fit.
-void Append(char *out, std::size_t size, const char *suffix)
-{
-  std::size_t length = std::strlen(out);
-  while (*suffix != '\0' && length + 1 < size)
-  {
-    out[length++] = *suffix++;
-  }
-  out[length] = '\0';
-}
-
-void Copy(char *out, std::size_t size, const char *text)
-{
-  out[0] = '\0';
-  Append(out, size, text);
-}
-
 void FormatReading(char *out, std::size_t size, const std::optional<std::int32_t> &centi, int decimals)
 {
   if (!centi || !text_format::Centi(out, size, *centi, decimals))
   {
-    Copy(out, size, decimals == 0 ? kMissingInteger : kMissingDecimal);
+    text_format::Copy(out, size, decimals == 0 ? kMissingInteger : kMissingDecimal);
   }
 }
 
@@ -46,16 +27,16 @@ void FormatDate(char *out, std::size_t size, const Ds3231::DateTime &time)
   const int weekday = text_format::DayOfWeek(time.year, time.month, time.date);
   if (weekday < 0 || time.month < 1 || time.month > 12)
   {
-    Copy(out, size, "--- -- ---");
+    text_format::Copy(out, size, "--- -- ---");
     return;
   }
   char day[3];
   text_format::TwoDigits(day, time.date);
-  Copy(out, size, kDayNames[weekday]);
-  Append(out, size, " ");
-  Append(out, size, day[0] == '0' ? day + 1 : day);
-  Append(out, size, " ");
-  Append(out, size, kMonthNames[time.month - 1]);
+  text_format::Copy(out, size, kDayNames[weekday]);
+  text_format::Append(out, size, " ");
+  text_format::Append(out, size, day[0] == '0' ? day + 1 : day);
+  text_format::Append(out, size, " ");
+  text_format::Append(out, size, kMonthNames[time.month - 1]);
 }
 
 // Layout (200 x 200). Small text is the 5x7 font at 2x, readings at 3x.
@@ -101,14 +82,14 @@ MainScreenText BuildMainScreenText(const MainScreenData &data)
     char minutes[3];
     text_format::TwoDigits(hours, data.time->hour);
     text_format::TwoDigits(minutes, data.time->minute);
-    Copy(text.time, sizeof(text.time), hours);
-    Append(text.time, sizeof(text.time), ":");
-    Append(text.time, sizeof(text.time), minutes);
+    text_format::Copy(text.time, sizeof(text.time), hours);
+    text_format::Append(text.time, sizeof(text.time), ":");
+    text_format::Append(text.time, sizeof(text.time), minutes);
   }
   else
   {
-    Copy(text.date, sizeof(text.date), "--- -- ---");
-    Copy(text.time, sizeof(text.time), "--:--");
+    text_format::Copy(text.date, sizeof(text.date), "--- -- ---");
+    text_format::Copy(text.time, sizeof(text.time), "--:--");
   }
 
   std::optional<std::int32_t> temperature;
@@ -128,20 +109,20 @@ MainScreenText BuildMainScreenText(const MainScreenData &data)
   {
     char value[sizeof(text.light)];
     FormatReading(value, sizeof(value), data.light->luxCenti, 0);
-    Copy(text.light, sizeof(text.light), data.light->saturated ? ">" : "");
-    Append(text.light, sizeof(text.light), value);
+    text_format::Copy(text.light, sizeof(text.light), data.light->saturated ? ">" : "");
+    text_format::Append(text.light, sizeof(text.light), value);
   }
   else
   {
-    Copy(text.light, sizeof(text.light), kMissingInteger);
+    text_format::Copy(text.light, sizeof(text.light), kMissingInteger);
   }
 
-  Copy(text.storage, sizeof(text.storage), data.storageOk ? "SD OK" : "NO SD");
+  text_format::Copy(text.storage, sizeof(text.storage), data.storageOk ? "SD OK" : "NO SD");
 
   char minutes[4] = "";
   text_format::Centi(minutes, sizeof(minutes), data.wakeIntervalMinutes * 100, 0);
-  Copy(text.interval, sizeof(text.interval), minutes);
-  Append(text.interval, sizeof(text.interval), " min");
+  text_format::Copy(text.interval, sizeof(text.interval), minutes);
+  text_format::Append(text.interval, sizeof(text.interval), " min");
 
   return text;
 }

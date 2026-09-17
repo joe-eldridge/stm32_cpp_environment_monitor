@@ -65,6 +65,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BSP/Components/graphics/font_5x7.cpp
     Core/Src/text_format.cpp
     Core/Src/main_screen.cpp
+    Core/Src/hourly_history.cpp
+    Core/Src/trend_screen.cpp
 )
 
 # C++ hot-path/bare-metal build: no exception unwind tables, no RTTI

@@ -13,6 +13,7 @@
 #include "fatfs.h"
 #include "i2c_bus.hpp"
 #include "hal_gpio_pin.hpp"
+#include "hourly_history.hpp"
 #include "i2c_fault_injection.hpp"
 #include "main_screen.hpp"
 #include "low_power.hpp"
@@ -20,6 +21,7 @@
 #include "mono_framebuffer.hpp"
 #include "spi_bus.hpp"
 #include "time_sync.hpp"
+#include "trend_screen.hpp"
 #include "veml7700.hpp"
 
 extern "C" UART_HandleTypeDef huart2;
@@ -47,6 +49,19 @@ static_assert(Ds3231::IsValidWakeInterval(kWakeIntervalMinutes), "wake interval 
 // A full refresh clears the ghosting partial refreshes leave behind. With a
 // 1-minute wake interval this is once an hour.
 constexpr std::uint32_t kSamplesPerFullRefresh = 60;
+
+// Samples are averaged over this period, and the 24 most recent periods are
+// plotted on the trend screen - so an hour each, covering a day. Shorten it
+// (to 1, say) to watch the plot fill during testing; the trend screen then
+// replaces the main screen on nearly every wake.
+constexpr std::uint16_t kTrendPeriodMinutes = 1;
+
+// Which metric the trend screen plots. The planned encoder menu will make
+// this switchable at runtime.
+constexpr Metric kTrendMetric = Metric::Temperature;
+
+// A day of averages, about 700 bytes - static rather than on the 1 KB stack.
+HourlyHistory g_history(kTrendPeriodMinutes);
 
 // The display framebuffer: 5 KB, static so it isn't on the 1 KB stack.
 std::array<std::uint8_t, Ssd1681::kImageBytes> g_frame{};
@@ -288,6 +303,7 @@ void AppMain()
 
   // Sample 0 is taken straight after boot, so the screen shows real values
   // from the start; every later sample follows an RTC alarm wake.
+  bool wasTrendScreen = false;
   for (std::uint32_t sample = 0;; ++sample)
   {
     WakeLog("\r\nSample #");
@@ -328,6 +344,10 @@ void AppMain()
 
     const bool logged = LogRecord(now, measurements, light);
 
+    // Without a timestamp a sample can't be placed on the time axis, so it
+    // is logged (above, if the RTC read succeeded) but not averaged.
+    const bool periodEnded = now ? g_history.Add(*now, measurements, light) : false;
+
     MainScreenData screen;
     screen.time = now;
     screen.climate = measurements;
@@ -335,15 +355,28 @@ void AppMain()
     screen.storageOk = logged;
     screen.wakeIntervalMinutes = kWakeIntervalMinutes;
 
+    TrendScreenData trend;
+    trend.history = &g_history;
+    trend.metric = kTrendMetric;
+    trend.time = now;
+
+    // The trend screen appears for one wake whenever a period completes,
+    // i.e. on the first sample of each hour; the main screen shows the rest
+    // of the time. Swapping between two whole screens is worth a full
+    // refresh, which also clears any accumulated ghosting.
     // The first update after boot is always full (EpaperDisplay enforces it),
     // clearing whatever the panel showed before. A failure isn't fatal:
     // sampling and logging carry on.
-    const Ssd1681::RefreshMode mode = (sample % kSamplesPerFullRefresh == 0) ? Ssd1681::RefreshMode::Full
-                                                                             : Ssd1681::RefreshMode::Partial;
-    if (!display.Update(mode, [&screen](MonoFramebuffer &c) { DrawMainScreen(c, screen); }))
+    const bool fullRefresh = periodEnded || wasTrendScreen || (sample % kSamplesPerFullRefresh == 0);
+    const Ssd1681::RefreshMode mode = fullRefresh ? Ssd1681::RefreshMode::Full : Ssd1681::RefreshMode::Partial;
+    const bool updated = periodEnded
+                             ? display.Update(mode, [&trend](MonoFramebuffer &c) { DrawTrendScreen(c, trend); })
+                             : display.Update(mode, [&screen](MonoFramebuffer &c) { DrawMainScreen(c, screen); });
+    if (!updated)
     {
       WakeLog(" DisplayFailed");
     }
+    wasTrendScreen = periodEnded;
 
     if (!rtc.ScheduleNextAlarm(kWakeIntervalMinutes))
     {

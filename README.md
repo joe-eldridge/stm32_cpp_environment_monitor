@@ -31,9 +31,9 @@ The application code is written in C++17, without heap allocation, exceptions or
 
 ## How it works
 
-<img src="docs/images/main_screen.png" alt="Main screen: date and time, temperature, humidity, pressure and light readings, SD status and wake interval" width="300">
+<img src="docs/images/main_screen.png" alt="Main screen: date and time, temperature, humidity, pressure and light readings, SD status and wake interval" width="300"> <img src="docs/images/trend_screen.png" alt="Trend screen: a day of hourly temperature averages plotted against time, with the high and low" width="300">
 
-*The main screen, rendered on a PC by the `screen_preview` tool (see [Testing](#testing)).*
+*The main screen and the trend screen, rendered on a PC by the `screen_preview` tool (see [Testing](#testing)). The break in the plot is an hour with no readings.*
 
 ```mermaid
 %%{init: {"sequence": {"mirrorActors": false}}}%%
@@ -49,7 +49,8 @@ sequenceDiagram
     MCU->>MCU: Restore clocks, clear alarm flag
     MCU->>S: Power up, take one measurement, power down
     MCU->>SD: Append CSV row (timestamped from the RTC)
-    MCU->>EPD: Wake, partial refresh (full once an hour), deep sleep
+    MCU->>MCU: Add the sample to the hour's average
+    MCU->>EPD: Wake, partial refresh (trend screen and a full refresh on the hour), deep sleep
     MCU->>RTC: Arm next alarm
 ```
 
@@ -64,6 +65,7 @@ sequenceDiagram
   ```
 
   A failed sensor read leaves its fields empty rather than stopping the log.
+- **Trend screen:** samples are averaged by the hour, and the last 24 hourly averages are plotted against time. The screen appears on the first wake of each hour, in place of the main screen, and a full refresh is used for the change of screen.
 - **Setting the time:** if the DS3231 reports that its oscillator has stopped (for example, a flat backup battery), the firmware prompts over the serial port for `YYYY-MM-DD HH:MM:SS` before starting.
 
 ## Design notes
@@ -81,6 +83,8 @@ sequenceDiagram
 **Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. A partial refresh needs the image currently on the panel as a reference. `EpaperDisplay` uses its single 5 KB framebuffer for that: it uploads the framebuffer as the reference *before* the new frame is drawn into it, so only one image buffer is needed in the 20 KB of RAM. The first update after boot, and any update after a failure, is promoted to a full refresh, since the panel's contents can't be trusted then.
 
 **Screens.** Each screen is split into its content (fixed-size strings built from the readings, unit-tested exactly) and its layout (drawing those strings). Text uses the public-domain X11 5×7 bitmap font, converted to a flash table by [tools/bdf_to_font.py](tools/bdf_to_font.py) and scaled up for the large readings. Numbers are formatted with a small fixed-point formatter rather than `printf`, which would pull in a large part of the C library.
+
+**Hourly averages.** Samples are accumulated into the hour their timestamp falls in, and an hour is closed out when a sample arrives for the next one. Periods are identified by their absolute start time rather than by counting samples, so the plot's time axis stays linear: hours the device slept through, or in which every read failed, are kept as gaps and break the line rather than being drawn as a straight segment across the missing time. A day of averages costs about 700 bytes of the 20 KB of RAM. The history starts empty after a reset; rebuilding it would mean parsing a day of CSV rows on the wake after a reset, for a plot that refills itself within a day.
 
 **Sensor accuracy.**
 - **BME280:** uses Bosch's integer compensation formulas, with signed calibration values handled as in Bosch's reference driver.
@@ -107,13 +111,15 @@ Coverage includes:
 - framebuffer drawing: pixel layout, clipping, rectangles and lines in every direction,
 - text rendering, number formatting (rounding, negative values, buffer limits) and day-of-week calculation,
 - the main screen's content, including missing and saturated readings and the widest values,
+- hourly averaging: rounding, gaps, the ring buffer filling and wrapping, midnight and month ends, and the clock being set backwards,
+- the trend screen: its labels, how values map onto the plot, and that a new day of data fills from the right with gaps left unjoined,
 - SD card capacity parsing from the CSD register,
 - FatFs timestamp packing,
 - timeout behaviour across tick wraparound.
 
 ### Screen previews
 
-`screen_preview` renders the screens with sample data, so layouts can be checked without flashing:
+`screen_preview` renders every screen with sample data, including an empty history and a full day of it, so layouts can be checked without flashing:
 
 ```bash
 build/tests/screen_preview build/tests
@@ -173,7 +179,7 @@ docs/images/              README images
 - [x] CI: unit tests and firmware builds
 - [x] SSD1681 eInk driver with full and partial refresh (showing a test screen for now)
 - [x] Main screen: current readings, update time and SD status
-- [ ] Hourly averages and a 24-hour trend plot
+- [x] Hourly averages and a 24-hour trend plot
 - [ ] Button menu: set time, eject and format the SD card
 - [ ] Current-consumption measurements and battery-life estimate
 - [ ] Production wake interval: currently 1 minute for testing, with 5 minutes planned

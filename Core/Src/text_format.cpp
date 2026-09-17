@@ -62,6 +62,34 @@ void TwoDigits(char *out, std::uint8_t value)
   out[2] = '\0';
 }
 
+void Append(char *out, std::size_t size, const char *text)
+{
+  if (size == 0)
+  {
+    return;
+  }
+  std::size_t length = 0;
+  while (length + 1 < size && out[length] != '\0')
+  {
+    ++length;
+  }
+  while (*text != '\0' && length + 1 < size)
+  {
+    out[length++] = *text++;
+  }
+  out[length] = '\0';
+}
+
+void Copy(char *out, std::size_t size, const char *text)
+{
+  if (size == 0)
+  {
+    return;
+  }
+  out[0] = '\0';
+  Append(out, size, text);
+}
+
 int DayOfWeek(int year, int month, int day)
 {
   if (month < 1 || month > 12)
