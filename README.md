@@ -31,6 +31,10 @@ The application code is written in C++17, without heap allocation, exceptions or
 
 ## How it works
 
+<img src="docs/images/main_screen.png" alt="Main screen: date and time, temperature, humidity, pressure and light readings, SD status and wake interval" width="300">
+
+*The main screen, rendered on a PC by the `screen_preview` tool (see [Testing](#testing)).*
+
 ```mermaid
 %%{init: {"sequence": {"mirrorActors": false}}}%%
 sequenceDiagram
@@ -49,6 +53,7 @@ sequenceDiagram
     MCU->>RTC: Arm next alarm
 ```
 
+- **First sample at boot:** the device samples, logs and draws the screen straight away, then sleeps until the first alarm.
 - **Wake source:** DS3231 Alarm 1, matched on minutes and seconds, re-armed after every wake. The interval must divide an hour evenly, which is checked at compile time.
 - **Sensors sleep between samples.** The BME280 runs in forced mode, taking one conversion on request (about 10 ms) and otherwise sleeping. The VEML7700 is held in shutdown except for the roughly 115 ms needed for one reading. The datasheets give about 0.1 µA and 0.5 µA for those sleep states, against hundreds of µA and 45 µA left running.
 - **Log format:** `LOG.CSV` holds one row per wake. Values are fixed-point integers, since the Cortex-M0+ has no FPU. For example:
@@ -75,6 +80,8 @@ sequenceDiagram
 
 **Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. A partial refresh needs the image currently on the panel as a reference. `EpaperDisplay` uses its single 5 KB framebuffer for that: it uploads the framebuffer as the reference *before* the new frame is drawn into it, so only one image buffer is needed in the 20 KB of RAM. The first update after boot, and any update after a failure, is promoted to a full refresh, since the panel's contents can't be trusted then.
 
+**Screens.** Each screen is split into its content (fixed-size strings built from the readings, unit-tested exactly) and its layout (drawing those strings). Text uses the public-domain X11 5×7 bitmap font, converted to a flash table by [tools/bdf_to_font.py](tools/bdf_to_font.py) and scaled up for the large readings. Numbers are formatted with a small fixed-point formatter rather than `printf`, which would pull in a large part of the C library.
+
 **Sensor accuracy.**
 - **BME280:** uses Bosch's integer compensation formulas, with signed calibration values handled as in Bosch's reference driver.
 - **VEML7700:** uses the 0.0672 lx/count resolution from Vishay's current application note ([84323, rev. 06-Mar-2025](https://www.vishay.com/docs/84323/designingveml7700.pdf)); the original datasheet value reads about 14% low. Readings at full scale are flagged as saturated.
@@ -98,9 +105,20 @@ Coverage includes:
 - SSD1681 command sequences, refresh modes and BUSY handling, against a recording SPI fake,
 - the e-paper update cycle: reference-image ordering, forced full refreshes, and sleeping after failures,
 - framebuffer drawing: pixel layout, clipping, rectangles and lines in every direction,
+- text rendering, number formatting (rounding, negative values, buffer limits) and day-of-week calculation,
+- the main screen's content, including missing and saturated readings and the widest values,
 - SD card capacity parsing from the CSD register,
 - FatFs timestamp packing,
 - timeout behaviour across tick wraparound.
+
+### Screen previews
+
+`screen_preview` renders the screens with sample data, so layouts can be checked without flashing:
+
+```bash
+build/tests/screen_preview build/tests
+tools/pbm_to_png.py build/tests/*.pbm
+```
 
 ### On-target fault injection
 
@@ -140,7 +158,9 @@ Drivers/BSP/Components/   Project drivers: bme280, ds3231, veml7700, sdcard, dis
                           graphics (framebuffer), util (buses, pins, timing)
 Drivers/CMSIS, Drivers/STM32L0xx_HAL_Driver   ST vendor code
 FATFS/, Middlewares/      FatFs and its glue to the SD card driver
-tests/                    Host unit tests and fakes
+tests/                    Host unit tests, fakes and the screen preview tool
+tools/                    Font generator and preview image converter
+docs/images/              README images
 .github/workflows/        CI
 ```
 
@@ -152,7 +172,8 @@ tests/                    Host unit tests and fakes
 - [x] I2C bus recovery with on-target fault injection
 - [x] CI: unit tests and firmware builds
 - [x] SSD1681 eInk driver with full and partial refresh (showing a test screen for now)
-- [ ] Display screens: text rendering, hourly averages, trend plot
+- [x] Main screen: current readings, update time and SD status
+- [ ] Hourly averages and a 24-hour trend plot
 - [ ] Button menu: set time, eject and format the SD card
 - [ ] Current-consumption measurements and battery-life estimate
 - [ ] Production wake interval: currently 1 minute for testing, with 5 minutes planned

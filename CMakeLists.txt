@@ -61,6 +61,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/BSP/Components/sdcard/sdcard_diskio.cpp
     Drivers/BSP/Components/display/ssd1681.cpp
     Drivers/BSP/Components/graphics/mono_framebuffer.cpp
+    Drivers/BSP/Components/graphics/text.cpp
+    Drivers/BSP/Components/graphics/font_5x7.cpp
+    Core/Src/text_format.cpp
+    Core/Src/main_screen.cpp
 )
 
 # C++ hot-path/bare-metal build: no exception unwind tables, no RTTI

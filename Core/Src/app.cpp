@@ -14,6 +14,7 @@
 #include "i2c_bus.hpp"
 #include "hal_gpio_pin.hpp"
 #include "i2c_fault_injection.hpp"
+#include "main_screen.hpp"
 #include "low_power.hpp"
 #include "main.h"
 #include "mono_framebuffer.hpp"
@@ -45,7 +46,7 @@ static_assert(Ds3231::IsValidWakeInterval(kWakeIntervalMinutes), "wake interval 
 
 // A full refresh clears the ghosting partial refreshes leave behind. With a
 // 1-minute wake interval this is once an hour.
-constexpr std::uint32_t kWakesPerFullRefresh = 60;
+constexpr std::uint32_t kSamplesPerFullRefresh = 60;
 
 // The display framebuffer: 5 KB, static so it isn't on the 1 KB stack.
 std::array<std::uint8_t, Ssd1681::kImageBytes> g_frame{};
@@ -109,19 +110,18 @@ constexpr const char *kLogFileName = "LOG.CSV";
 constexpr const char *kLogHeader =
     "Timestamp,TemperatureCentiC,PressureCentiHpa,HumidityCentiPct,LuxCenti,LuxSaturated\n";
 
-// Appends one CSV row for this wake cycle: an RTC timestamp plus whichever
+// Appends one CSV row for this sample: an RTC timestamp plus whichever
 // sensor readings succeeded (blank field if a sensor read failed). Logging
 // failures (SD not mounted, write error) are reported in the wake log but not
 // fatal - sensor sampling and the sleep/wake cycle continue regardless,
 // since a lost log entry shouldn't stop the device monitoring.
-void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measurements,
+bool LogRecord(const std::optional<Ds3231::DateTime> &dt, const std::optional<Bme280::Measurements> &measurements,
                const std::optional<Veml7700::Reading> &light)
 {
-  const std::optional<Ds3231::DateTime> dt = rtc.ReadDateTime();
   if (!dt)
   {
     WakeLog(" LogSkipped(rtc)");
-    return;
+    return false;
   }
 
   FIL file;
@@ -140,7 +140,7 @@ void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measureme
     WakeLog(" LogSkipped(open, FRESULT ");
     WakeLogDecimal(result);
     WakeLog(")");
-    return;
+    return false;
   }
 
   if (f_size(&file) == 0)
@@ -178,42 +178,10 @@ void LogRecord(Ds3231 &rtc, const std::optional<Bme280::Measurements> &measureme
     WakeLog(" LogFailed(close, FRESULT ");
     WakeLogDecimal(result);
     WakeLog(")");
-    return;
+    return false;
   }
   WakeLog(" Logged");
-}
-
-// TEMPORARY display test screen, until the real screens exist. The border
-// and cross are static; the eight squares show the wake count in binary
-// (most significant bit on the left), so each wake changes a few pixels
-// through a partial refresh.
-void DrawTestScreen(MonoFramebuffer &canvas, std::uint32_t wakeCount)
-{
-  const int width = canvas.Width();
-  const int height = canvas.Height();
-  canvas.Fill(Color::White);
-  canvas.Rect(0, 0, width, height, Color::Black);
-  canvas.Rect(3, 3, width - 6, height - 6, Color::Black);
-
-  canvas.Rect(50, 30, 100, 100, Color::Black);
-  canvas.Line(50, 30, 149, 129, Color::Black);
-  canvas.Line(149, 30, 50, 129, Color::Black);
-
-  constexpr int kSquare = 18;
-  constexpr int kPitch = 21;
-  const int left = (width - (8 * kPitch - (kPitch - kSquare))) / 2;
-  for (int bit = 0; bit < 8; ++bit)
-  {
-    const int x = left + (7 - bit) * kPitch;
-    if ((wakeCount >> bit) & 1u)
-    {
-      canvas.FillRect(x, 160, kSquare, kSquare, Color::Black);
-    }
-    else
-    {
-      canvas.Rect(x, 160, kSquare, kSquare, Color::Black);
-    }
-  }
+  return true;
 }
 
 } // namespace
@@ -287,13 +255,6 @@ void AppMain()
     SyncTimeFromUart(&huart2, rtc);
   }
 
-  if (!rtc.ScheduleNextAlarm(kWakeIntervalMinutes))
-  {
-    // No alarm armed means nothing will ever wake the device again - treat
-    // this the same as an init failure rather than sleeping into a dead end.
-    HaltWithError();
-  }
-
   g_fatTimeRtc = &rtc;
 
   Bme280 bme280(bme280Device);
@@ -316,16 +277,6 @@ void AppMain()
   MonoFramebuffer canvas(g_frame.data(), Ssd1681::kWidth, Ssd1681::kHeight);
   EpaperDisplay display(panel, canvas);
 
-  std::uint32_t wakeCount = 0;
-
-  // First update is always a full refresh, clearing whatever the panel
-  // showed before this boot. A failure isn't fatal: logging carries on.
-  if (!display.Update(Ssd1681::RefreshMode::Full,
-                      [](MonoFramebuffer &c) { DrawTestScreen(c, 0); }))
-  {
-    SendLine("\r\nDisplay update failed");
-  }
-
   MX_FATFS_Init();
   if (f_mount(&USERFatFS, USERPath, 1) != FR_OK)
   {
@@ -335,34 +286,15 @@ void AppMain()
     SendLine("\r\nSD mount failed - will retry each wake");
   }
 
-  for (;;)
+  // Sample 0 is taken straight after boot, so the screen shows real values
+  // from the start; every later sample follows an RTC alarm wake.
+  for (std::uint32_t sample = 0;; ++sample)
   {
-    WakeLog("\r\nSleeping...");
-
-    // SysTick (HCLK-derived) has no clock source once the core stops in
-    // Stop mode - suspending it first avoids it silently missing ticks
-    // that would otherwise throw off HAL_GetTick()-based timeouts on wake.
-    HAL_SuspendTick();
-    HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
-
-    // Stop mode always resumes on MSI regardless of what was running
-    // before it, and fully powers down HSI16 (needed for I2C1's Fast Mode
-    // kernel clock) - both need restoring before anything below can
-    // safely touch the RTC over I2C.
-    SystemClock_Config();
-    HAL_ResumeTick();
-
-    if (!rtc.ClearAlarmFlag())
-    {
-      // Alarm flag stuck set means SQW/INT stays asserted and this loop
-      // would spin through Stop mode with no real sleep ever happening.
-      HaltWithError();
-    }
-
-    ++wakeCount;
-    WakeLog("\r\nWoke #");
-    WakeLogDecimal(static_cast<std::int32_t>(wakeCount));
+    WakeLog("\r\nSample #");
+    WakeLogDecimal(static_cast<std::int32_t>(sample));
     WakeLog(" ");
+
+    const std::optional<Ds3231::DateTime> now = rtc.ReadDateTime();
 
     const std::optional<Bme280::Measurements> measurements = bme280.Read();
     if (measurements)
@@ -394,17 +326,51 @@ void AppMain()
       WakeLog(" VEML7700 read failed");
     }
 
-    LogRecord(rtc, measurements, light);
+    const bool logged = LogRecord(now, measurements, light);
 
-    const Ssd1681::RefreshMode mode = (wakeCount % kWakesPerFullRefresh == 0) ? Ssd1681::RefreshMode::Full
-                                                                               : Ssd1681::RefreshMode::Partial;
-    if (!display.Update(mode, [wakeCount](MonoFramebuffer &c) { DrawTestScreen(c, wakeCount); }))
+    MainScreenData screen;
+    screen.time = now;
+    screen.climate = measurements;
+    screen.light = light;
+    screen.storageOk = logged;
+    screen.wakeIntervalMinutes = kWakeIntervalMinutes;
+
+    // The first update after boot is always full (EpaperDisplay enforces it),
+    // clearing whatever the panel showed before. A failure isn't fatal:
+    // sampling and logging carry on.
+    const Ssd1681::RefreshMode mode = (sample % kSamplesPerFullRefresh == 0) ? Ssd1681::RefreshMode::Full
+                                                                             : Ssd1681::RefreshMode::Partial;
+    if (!display.Update(mode, [&screen](MonoFramebuffer &c) { DrawMainScreen(c, screen); }))
     {
       WakeLog(" DisplayFailed");
     }
 
     if (!rtc.ScheduleNextAlarm(kWakeIntervalMinutes))
     {
+      // No alarm armed means nothing will ever wake the device again - halt
+      // visibly rather than sleep into a dead end.
+      HaltWithError();
+    }
+
+    WakeLog("\r\nSleeping...");
+
+    // SysTick (HCLK-derived) has no clock source once the core stops in
+    // Stop mode - suspending it first avoids it silently missing ticks
+    // that would otherwise throw off HAL_GetTick()-based timeouts on wake.
+    HAL_SuspendTick();
+    HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
+
+    // Stop mode always resumes on MSI regardless of what was running
+    // before it, and fully powers down HSI16 (needed for I2C1's Fast Mode
+    // kernel clock) - both need restoring before anything below can
+    // safely touch the RTC over I2C.
+    SystemClock_Config();
+    HAL_ResumeTick();
+
+    if (!rtc.ClearAlarmFlag())
+    {
+      // Alarm flag stuck set means SQW/INT stays asserted and this loop
+      // would spin through Stop mode with no real sleep ever happening.
       HaltWithError();
     }
   }

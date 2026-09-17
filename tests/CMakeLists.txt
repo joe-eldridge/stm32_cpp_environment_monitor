@@ -50,6 +50,10 @@ add_library(drivers STATIC
     ${COMPONENTS}/veml7700/veml7700.cpp
     ${COMPONENTS}/display/ssd1681.cpp
     ${COMPONENTS}/graphics/mono_framebuffer.cpp
+    ${COMPONENTS}/graphics/text.cpp
+    ${COMPONENTS}/graphics/font_5x7.cpp
+    ${FIRMWARE_ROOT}/Core/Src/text_format.cpp
+    ${FIRMWARE_ROOT}/Core/Src/main_screen.cpp
 )
 target_include_directories(drivers PUBLIC
     ${COMPONENTS}/util
@@ -71,13 +75,20 @@ add_executable(unit_tests
     test_ds3231.cpp
     test_epaper_display.cpp
     test_fat_time.cpp
+    test_main_screen.cpp
     test_mono_framebuffer.cpp
     test_ssd1681.cpp
+    test_text.cpp
+    test_text_format.cpp
     test_timeout.cpp
     test_veml7700.cpp
 )
 target_include_directories(unit_tests PRIVATE support)
 target_link_libraries(unit_tests PRIVATE drivers GTest::gtest_main project_warnings project_sanitizers)
+
+# Renders screens to image files for checking layouts; not run by ctest.
+add_executable(screen_preview screen_preview.cpp)
+target_link_libraries(screen_preview PRIVATE drivers project_warnings project_sanitizers)
 
 enable_testing()
 include(GoogleTest)
