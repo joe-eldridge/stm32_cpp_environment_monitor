@@ -89,9 +89,20 @@ sequenceDiagram
 - **SD card swaps:** the card can be removed and reinserted while running. A failed transfer marks the card uninitialised, and the next write re-initialises and re-mounts it. This needed a workaround for ST's FatFs glue, which caches `disk_initialize()` even when it fails; see [user_diskio.c](FATFS/Target/user_diskio.c).
 - **Shared SPI bus:** scope guards (RAII) always restore the bus speed and release chip-select, even on error paths. Changing the bus speed also waits for the frame in flight to finish, as the reference manual requires: clearing the enable bit part way through a byte stops the clock mid-frame and leaves the peripheral and the device it was addressing out of step. That one showed up only after the Debug build was optimised enough to close the gap between the last transfer and the speed change, and it broke the SD card and the display at once.
 
-**Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. `EpaperDisplay` holds two images: the canvas that screens draw on, and a copy of what the panel is currently showing. That second 5 KB costs a quarter of the MCU's RAM and earns it back twice over. A partial refresh needs the previous image as its reference, which is then simply to hand; and the two can be compared, so only the band of rows that actually differ is sent and driven. An update that changes nothing does nothing at all - no wake, no waveform, no current.
+**Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. `EpaperDisplay` holds two images: the canvas that screens draw on, and a copy of what the panel is currently showing. That second 5 KB costs a quarter of the MCU's RAM and earns it back twice over. A partial refresh needs the previous image as its reference, which is then simply to hand; and the two can be compared, so only the band of rows that actually differ is sent. An update that changes nothing does nothing at all - no wake, no waveform, no current.
 
-That design came from measuring rather than guessing. Timing the panel separately from the transfers showed the transfers were the larger half and, tellingly, took the same time for a partial refresh as for a full one - the panel's own waveform is 605 ms, against 2.1 seconds of sending two whole images at 1 MHz. Sending only what changed cut a menu step from 2.9 seconds to about 1.
+**Making the menu responsive** was done by measuring each update in parts - drawing, waking the panel, the panel's own waveform, and the rest - and fixing whichever was largest:
+
+| Change | What the timing showed | Menu step |
+|---|---|---|
+| Starting point | Sending two whole images at 1 MHz took longer than the panel's 0.6 s waveform | 2.9 s |
+| Send only the rows that changed | | 1.0 s |
+| DMA for image blocks | Transfers became cheap; drawing was now the largest part, at 244 ms | 0.92 s |
+| Fill rectangles a byte at a time, draw glyphs as runs | The selection bar alone had been 4,224 separate pixel writes | 0.75 s |
+
+Opening the menu also went from a full refresh to a partial one: 2.3 s to 0.76 s, with no visible ghosting. What remains is almost all the panel: 596 ms of a 745 ms step.
+
+Two things were tried and dropped, on the same evidence. Waveshare's fast partial waveform for this panel, loaded in place of the built-in one, measured 572 ms against 596. Shortening its main phase showed why: frames are 20 ms, their waveform is 17 of them, and about 230 ms of every refresh is fixed cost around the waveform, so the "0.3 s" on the product page is the waveform alone. A shorter waveform of our own was quicker but left ghosting. And keeping the panel powered between menu steps, which would avoid that fixed cost, re-highlighted items that had already been cleared; the cause is not yet understood, so it isn't used.
 
 The first update after boot, and any update after a failure, is promoted to a full refresh, since the panel's contents can't be trusted then.
 
@@ -142,10 +153,10 @@ Coverage includes:
 Debug builds time each display update and report the panel's own waveform separately from the time spent sending images to it:
 
 ```
-Menu partial refresh 1036ms (panel 605ms, transfers 431ms)
+Menu step: shown 745ms = draw 68 + wake 35 + panel 596 + rest 46, done 769ms
 ```
 
-That split is what found the SPI bug above: the transfer time was identical for full and partial refreshes, which pointed at per-byte cost rather than anything the panel was doing.
+"Shown" runs from handling the input to the image being on the panel; "done" includes anything after. An earlier version of this split, panel against everything else, is what found the SPI bug above: that time was identical for full and partial refreshes, which pointed at per-byte cost rather than anything the panel was doing. The finer split then showed drawing had become the largest cost once DMA took over the transfers.
 
 `SdCard` records how its last initialisation went - which step it reached and how long that took - and prints it at boot. FatFs reports a card that won't mount as `FR_NOT_READY` and nothing more, so this is most of the diagnosis:
 
