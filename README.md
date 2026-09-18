@@ -15,6 +15,7 @@ The application code is written in C++17, without heap allocation, exceptions or
 | Bosch BME280 (Adafruit board) | Temperature, pressure, humidity | I2C `0x77` |
 | Vishay VEML7700 (Adafruit board) | Ambient light | I2C `0x10` |
 | Adafruit 1.54" eInk (SSD1681, 200×200, original revision) with microSD slot and SPI SRAM | Display and log storage | SPI |
+| KY-040 rotary encoder with push switch | Menu control | GPIO, all three lines on EXTI |
 
 ### Pin assignments
 
@@ -27,6 +28,8 @@ The application code is written in C++17, without heap allocation, exceptions or
 | eInk CS / D/C / RST / BUSY | PA8 / PB10 / PB4 / PB5 | |
 | SRAM CS | PC7 | |
 | USART2 TX / RX | PA2 / PA3 | ST-LINK virtual COM port, 9600 baud |
+| Encoder CLK / DT | PC1 / PC2 | Decoded in an EXTI handler on either edge, unmasked only while the menu is open; internal pull-ups |
+| Encoder switch | PC3 | Falling-edge EXTI wakes the MCU and opens the menu |
 | User button B1 | PC13 | Held at reset: I2C fault-injection test (see below) |
 
 ## How it works
@@ -34,6 +37,10 @@ The application code is written in C++17, without heap allocation, exceptions or
 <img src="docs/images/main_screen.png" alt="Main screen: date and time, temperature, humidity, pressure and light readings, SD status and wake interval" width="300"> <img src="docs/images/trend_screen.png" alt="Trend screen: a day of hourly temperature averages plotted against time, with the high and low" width="300">
 
 *The main screen and the trend screen, rendered on a PC by the `screen_preview` tool (see [Testing](#testing)). The break in the plot is an hour with no readings.*
+
+<img src="docs/images/menu_screen.png" alt="Menu screen: Set time, Eject card, Erase logs and Close, with the first item highlighted" width="300">
+
+*The menu. Turn to move, click to choose, hold to go back.*
 
 ```mermaid
 %%{init: {"sequence": {"mirrorActors": false}}}%%
@@ -64,8 +71,9 @@ sequenceDiagram
   2026-09-16 19:45:00,2352,101695,5054,37645,0
   ```
 
-  A failed sensor read leaves its fields empty rather than stopping the log.
+  A failed sensor read leaves its fields empty rather than stopping the log. The menu's "erase logs" deletes this file; cards themselves are formatted on a PC, as FAT16 or FAT32. Rebuilding a filesystem on the device would mean writing out the whole FAT, which on a 16 GB card at this bus speed takes over ten minutes (measured).
 - **Trend screen:** samples are averaged by the hour, and the last 24 hourly averages are plotted against time. The screen appears on the first wake of each hour, in place of the main screen, and a full refresh is used for the change of screen.
+- **Menu:** pressing the encoder's switch wakes the device and opens a menu for setting the clock, ejecting the card and erasing the logs. It closes itself after 30 seconds untouched, then the normal cycle resumes with a fresh sample.
 - **Setting the time:** if the DS3231 reports that its oscillator has stopped (for example, a flat backup battery), the firmware prompts over the serial port for `YYYY-MM-DD HH:MM:SS` before starting.
 
 ## Design notes
@@ -77,14 +85,23 @@ sequenceDiagram
 **Robustness.**
 - **Bounded waits:** every busy-wait is limited by a `Timeout` that stays correct when the 32-bit tick counter wraps (after about 49 days).
 - **I2C bus recovery:** on a timeout, the I2C peripheral is reset. If a slave is still holding SDA low, for example after an MCU reset mid-read, the driver clocks it free and sends a STOP. The same recovery runs at every boot.
+- **Card compatibility:** two details of the SPI protocol that cards differ in their tolerance of. Each command is preceded by eight idle clocks, which the specification requires between one command's response and the next command: without them a card still releasing the line misreads the command frame and answers with an R1 with half its error bits set. And initialisation runs at 262 kHz, inside the specification's 100-400 kHz window rather than merely below its ceiling. Either fault shows up as one brand of card working and another not, with nothing in between to suggest why - which is what happened here, and what the init diagnostics below were added to answer.
 - **SD card swaps:** the card can be removed and reinserted while running. A failed transfer marks the card uninitialised, and the next write re-initialises and re-mounts it. This needed a workaround for ST's FatFs glue, which caches `disk_initialize()` even when it fails; see [user_diskio.c](FATFS/Target/user_diskio.c).
-- **Shared SPI bus:** scope guards (RAII) always restore the bus speed and release chip-select, even on error paths.
+- **Shared SPI bus:** scope guards (RAII) always restore the bus speed and release chip-select, even on error paths. Changing the bus speed also waits for the frame in flight to finish, as the reference manual requires: clearing the enable bit part way through a byte stops the clock mid-frame and leaves the peripheral and the device it was addressing out of step. That one showed up only after the Debug build was optimised enough to close the gap between the last transfer and the speed change, and it broke the SD card and the display at once.
 
-**Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. A partial refresh needs the image currently on the panel as a reference. `EpaperDisplay` uses its single 5 KB framebuffer for that: it uploads the framebuffer as the reference *before* the new frame is drawn into it, so only one image buffer is needed in the 20 KB of RAM. The first update after boot, and any update after a failure, is promoted to a full refresh, since the panel's contents can't be trusted then.
+**Display.** The SSD1681 is kept in deep sleep (about 1 µA) between updates. `EpaperDisplay` holds two images: the canvas that screens draw on, and a copy of what the panel is currently showing. That second 5 KB costs a quarter of the MCU's RAM and earns it back twice over. A partial refresh needs the previous image as its reference, which is then simply to hand; and the two can be compared, so only the band of rows that actually differ is sent and driven. An update that changes nothing does nothing at all - no wake, no waveform, no current.
+
+That design came from measuring rather than guessing. Timing the panel separately from the transfers showed the transfers were the larger half and, tellingly, took the same time for a partial refresh as for a full one - the panel's own waveform is 605 ms, against 2.1 seconds of sending two whole images at 1 MHz. Sending only what changed cut a menu step from 2.9 seconds to about 1.
+
+The first update after boot, and any update after a failure, is promoted to a full refresh, since the panel's contents can't be trusted then.
 
 **Screens.** Each screen is split into its content (fixed-size strings built from the readings, unit-tested exactly) and its layout (drawing those strings). Text uses the public-domain X11 5×7 bitmap font, converted to a flash table by [tools/bdf_to_font.py](tools/bdf_to_font.py) and scaled up for the large readings. Numbers are formatted with a small fixed-point formatter rather than `printf`, which would pull in a large part of the C library.
 
 **Hourly averages.** Samples are accumulated into the hour their timestamp falls in, and an hour is closed out when a sample arrives for the next one. Periods are identified by their absolute start time rather than by counting samples, so the plot's time axis stays linear: hours the device slept through, or in which every read failed, are kept as gaps and break the line rather than being drawn as a straight segment across the missing time. A day of averages costs about 700 bytes of the 20 KB of RAM. The history starts empty after a reset; rebuilding it would mean parsing a day of CSV rows on the wake after a reset, for a plot that refills itself within a day.
+
+**Menu.** The encoder is decoded in its interrupt rather than polled: a refresh blocks the main loop for about a second, and a detent turned during one would otherwise be lost. Both of its lines interrupt on either edge, and the handler reads the pair, since the decoder needs both levels rather than which one moved. The interrupts are unmasked only while the menu is open, so a knocked knob can't wake the device from Stop mode and spend a wake cycle on nothing.
+
+The menu itself holds no pins and performs no actions: it turns encoder movement and button events into requests, and the application carries them out and hands back a message to show. That keeps every path through it testable on a host, including the ones that are awkward to reach by hand, such as declining to erase or abandoning a half-finished clock edit. The encoder decoding is separate again: transitions that change both lines at once cannot happen on a real turn, so they are discarded rather than guessed at, and contact bounce cancels itself out.
 
 **Sensor accuracy.**
 - **BME280:** uses Bosch's integer compensation formulas, with signed calibration values handled as in Bosch's reference driver.
@@ -107,15 +124,35 @@ Coverage includes:
 - DS3231 alarm scheduling at interval boundaries, including the window where an alarm write could land too late,
 - VEML7700 power sequencing, scaling and saturation,
 - SSD1681 command sequences, refresh modes and BUSY handling, against a recording SPI fake,
-- the e-paper update cycle: reference-image ordering, forced full refreshes, and sleeping after failures,
+- the e-paper update cycle: reference-image ordering, forced full refreshes, sleeping after failures, and that only the changed rows are sent (and nothing at all when nothing changed),
 - framebuffer drawing: pixel layout, clipping, rectangles and lines in every direction,
 - text rendering, number formatting (rounding, negative values, buffer limits) and day-of-week calculation,
 - the main screen's content, including missing and saturated readings and the widest values,
 - hourly averaging: rounding, gaps, the ring buffer filling and wrapping, midnight and month ends, and the clock being set backwards,
 - the trend screen: its labels, how values map onto the plot, and that a new day of data fills from the right with gaps left unjoined,
+- encoder decoding: direction, part-turns, bounce, and what happens when samples are missed,
+- button debouncing, including the difference between a click and a hold,
+- the menu: every screen and transition, and the clock editor's month lengths and leap years,
 - SD card capacity parsing from the CSD register,
 - FatFs timestamp packing,
 - timeout behaviour across tick wraparound.
+
+### Measuring on the target
+
+Debug builds time each display update and report the panel's own waveform separately from the time spent sending images to it:
+
+```
+Menu partial refresh 1036ms (panel 605ms, transfers 431ms)
+```
+
+That split is what found the SPI bug above: the transfer time was identical for full and partial refreshes, which pointed at per-byte cost rather than anything the panel was doing.
+
+`SdCard` records how its last initialisation went - which step it reached and how long that took - and prints it at boot. FatFs reports a card that won't mount as `FR_NOT_READY` and nothing more, so this is most of the diagnosis:
+
+```
+SD init took 145ms, reached complete
+SD init took 1000ms, reached ACMD41 (still busy)
+```
 
 ### Screen previews
 
@@ -159,9 +196,11 @@ The output is `build/Release/stm32_cpp_environment_monitor.elf`. Open the ST-LIN
 ## Project layout
 
 ```
-Core/                     Application (app.cpp), CubeMX init code, fault-injection hook
+Core/                     Application (app.cpp), the screens and the menu, hourly averaging,
+                          CubeMX init code, fault-injection hook
 Drivers/BSP/Components/   Project drivers: bme280, ds3231, veml7700, sdcard, display (SSD1681),
-                          graphics (framebuffer), util (buses, pins, timing)
+                          graphics (framebuffer, font, text), input (encoder, button),
+                          util (buses, pins, timing)
 Drivers/CMSIS, Drivers/STM32L0xx_HAL_Driver   ST vendor code
 FATFS/, Middlewares/      FatFs and its glue to the SD card driver
 tests/                    Host unit tests, fakes and the screen preview tool
@@ -177,10 +216,10 @@ docs/images/              README images
 - [x] SD card logging with removal and reinsertion recovery
 - [x] I2C bus recovery with on-target fault injection
 - [x] CI: unit tests and firmware builds
-- [x] SSD1681 eInk driver with full and partial refresh (showing a test screen for now)
+- [x] SSD1681 eInk driver with full and partial refresh
 - [x] Main screen: current readings, update time and SD status
 - [x] Hourly averages and a 24-hour trend plot
-- [ ] Button menu: set time, eject and format the SD card
+- [x] Button menu: set the clock, eject the card, erase the logs
 - [ ] Current-consumption measurements and battery-life estimate
 - [ ] Production wake interval: currently 1 minute for testing, with 5 minutes planned
 - [ ] Hardware changes to the HW-084 RTC board (power LED, charging circuit)
