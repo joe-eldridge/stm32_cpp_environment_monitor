@@ -49,9 +49,13 @@ void SdCard_Deinit(void)
   g_sdCard.Deinit();
 }
 
-int SdCard_GetLastInitStage(void)
+SdCardInitReport SdCard_GetInitReport(void)
 {
-  return static_cast<int>(g_sdCard.GetLastInitStage());
+  const SdCard::InitReport report = g_sdCard.GetInitReport();
+  SdCardInitReport out;
+  out.stage = SdCard::InitStageName(report.stage);
+  out.durationMs = report.durationMs;
+  return out;
 }
 
 DRESULT SdCard_DiskIoctl(BYTE cmd, void *buff)

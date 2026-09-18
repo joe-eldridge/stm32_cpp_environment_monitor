@@ -21,8 +21,15 @@ extern "C"
   // For ejecting the card: call after f_unmount(). See SdCard::Deinit().
   void SdCard_Deinit(void);
 
-  // Diagnostic only - see SdCard::InitStage.
-  int SdCard_GetLastInitStage(void);
+  // How the last card initialisation went, for the boot log: which step it
+  // reached, named, and how long it took. See SdCard::InitReport.
+  typedef struct
+  {
+    const char *stage;
+    unsigned long durationMs;
+  } SdCardInitReport;
+
+  SdCardInitReport SdCard_GetInitReport(void);
 
 #ifdef __cplusplus
 }

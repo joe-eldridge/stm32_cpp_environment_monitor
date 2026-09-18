@@ -51,16 +51,31 @@ public:
   {
     return ready_;
   }
-  InitStage GetLastInitStage() const
+  // The stage above as text, for logging which step a card failed at.
+  static const char *InitStageName(InitStage stage);
+
+  // How the last initialisation went: the step it reached and how long it
+  // took. A card that won't mount says nothing useful through FatFs's
+  // FR_NOT_READY, and these two answer "which step, and was it slow or
+  // immediate" - which is most of the diagnosis.
+  struct InitReport
   {
-    return lastInitStage_;
+    InitStage stage = InitStage::NotStarted;
+    std::uint32_t durationMs = 0;
+  };
+
+  InitReport GetInitReport() const
+  {
+    return InitReport{lastInitStage_, lastInitMs_};
   }
 
   [[nodiscard]] bool ReadSector(std::uint32_t sector, std::uint8_t *buffer512);
   [[nodiscard]] bool WriteSector(std::uint32_t sector, const std::uint8_t *buffer512);
 
-  // Card capacity in 512-byte sectors, from its CSD register (needed by
-  // FatFs's f_mkfs).
+  // Card capacity in 512-byte sectors, from its CSD register. FatFs asks for
+  // it through GET_SECTOR_COUNT; nothing in this firmware needs it now that
+  // cards are formatted on a PC, but a disk driver that can't say how big
+  // its disk is would be an odd thing to ship.
   [[nodiscard]] std::optional<std::uint32_t> ReadSectorCount();
 
 private:
@@ -108,6 +123,10 @@ private:
   static constexpr std::uint8_t kDataTokenSingle = 0xFE;
   static constexpr std::uint32_t kSectorSize = 512;
 
+  // The spec's own limit for a card to finish initialising. Measured here at
+  // 145ms and 181ms for the two cards to hand, so there is room to spare;
+  // it isn't set looser because a wake with no card in the slot pays this
+  // in full before giving up.
   static constexpr std::uint32_t kInitTimeoutMs = 1000;
   static constexpr std::uint32_t kCommandResponseTimeoutMs = 100;
   static constexpr std::uint32_t kDataTokenTimeoutMs = 200;
@@ -117,4 +136,5 @@ private:
   bool blockAddressed_ = false; // false = SDSC (byte addresses), true = SDHC/SDXC (block addresses)
   bool ready_ = false;
   InitStage lastInitStage_ = InitStage::NotStarted;
+  std::uint32_t lastInitMs_ = 0;
 };

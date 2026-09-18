@@ -11,6 +11,17 @@ SdCard::SdCard(SpiBus &bus) : bus_(bus)
 bool SdCard::SendCommand(std::uint8_t cmd, std::uint32_t arg, std::uint8_t crc, std::uint8_t &r1Out)
 {
   std::uint8_t rx;
+  // Eight idle clocks before the command frame. The spec requires at least
+  // this much between one command's response and the next command (Nrc):
+  // without it the card can still be letting go of the line as the command
+  // byte arrives, and reads the frame out of step - which comes back as an
+  // R1 with half the error bits set rather than as a clean failure. Cards
+  // differ in how promptly they release, so this shows up on some and not
+  // others.
+  if (!bus_.TransferByte(0xFF, rx))
+  {
+    return false;
+  }
   if (!bus_.TransferByte(static_cast<std::uint8_t>(0x40 | cmd), rx))
   {
     return false;
@@ -130,10 +141,47 @@ bool SdCard::WriteDataBlock(const std::uint8_t *buffer, std::uint8_t token)
   return WaitReady(kWriteTimeoutMs);
 }
 
+const char *SdCard::InitStageName(InitStage stage)
+{
+  switch (stage)
+  {
+  case InitStage::NotStarted:
+    return "not started";
+  case InitStage::DummyClocksFailed:
+    return "power-up clocks";
+  case InitStage::Cmd0Failed:
+    return "CMD0 (no response)";
+  case InitStage::Cmd0NotIdle:
+    return "CMD0 (never idle)";
+  case InitStage::Cmd8Failed:
+    return "CMD8 (no response)";
+  case InitStage::Cmd8NotIdle:
+    return "CMD8 (bad response)";
+  case InitStage::Cmd8EchoFailed:
+    return "CMD8 echo (no response)";
+  case InitStage::Cmd8EchoMismatch:
+    return "CMD8 echo (mismatch)";
+  case InitStage::AcmdFailed:
+    return "ACMD41 (no response)";
+  case InitStage::AcmdTimeout:
+    return "ACMD41 (still busy)";
+  case InitStage::OcrFailed:
+    return "CMD58 (no response)";
+  case InitStage::OcrReadFailed:
+    return "CMD58 read";
+  case InitStage::SetBlockLengthFailed:
+    return "CMD16";
+  case InitStage::Complete:
+    return "complete";
+  }
+  return "unknown";
+}
+
 bool SdCard::Init()
 {
   ready_ = false;
   lastInitStage_ = InitStage::NotStarted;
+  const std::uint32_t startedMs = HAL_GetTick();
 
   // Scopes unwind in reverse: CS is released (plus its trailing clock byte)
   // at the slow rate, then the bus goes back to fast - on every exit path.
@@ -154,7 +202,9 @@ bool SdCard::Init()
 
   {
     const SelectScope select(bus_);
-    if (!InitSequence())
+    const bool ok = InitSequence();
+    lastInitMs_ = HAL_GetTick() - startedMs;
+    if (!ok)
     {
       return false;
     }
