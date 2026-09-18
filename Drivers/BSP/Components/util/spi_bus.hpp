@@ -55,6 +55,13 @@ public:
   [[nodiscard]] bool Write(const std::uint8_t *data, std::size_t length) override;
 
 private:
+  // Blocks at least this long go by DMA; shorter ones - command bytes and
+  // their parameters - are polled, where setting up a transfer would cost
+  // more than it saves.
+  static constexpr std::size_t kDmaMinimumBytes = 16;
+
+  [[nodiscard]] bool WritePolled(const std::uint8_t *data, std::size_t length);
+  [[nodiscard]] bool WriteDma(const std::uint8_t *data, std::size_t length);
   void SetPrescaler(std::uint32_t prescaler);
   void WaitUntilTransferComplete();
   bool TransferByteWithin(const Timeout &timeout, std::uint8_t txByte, std::uint8_t &rxByte);
