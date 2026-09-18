@@ -8,7 +8,7 @@ enum RootItem : std::size_t
 {
   kSetTime,
   kEjectCard,
-  kFormatCard,
+  kEraseLogs,
   kClose,
   kRootItemCount,
 };
@@ -16,7 +16,7 @@ enum RootItem : std::size_t
 constexpr const char *kRootItems[kRootItemCount] = {
     "Set time",
     "Eject card",
-    "Format card",
+    "Erase logs",
     "Close",
 };
 
@@ -147,10 +147,10 @@ MenuRequest Menu::ActivateRootItem()
   case kEjectCard:
     request.action = MenuAction::EjectCard;
     break;
-  case kFormatCard:
-    // Formatting throws away every log on the card, so it asks first, and
-    // starts on "No".
-    GoTo(Screen::ConfirmFormat);
+  case kEraseLogs:
+    // This throws away every reading the device has recorded, so it asks
+    // first, and starts on "No".
+    GoTo(Screen::ConfirmErase);
     break;
   case kClose:
   default:
@@ -209,7 +209,7 @@ MenuRequest Menu::Update(int detents, Button::Event buttonEvent)
     }
     break;
 
-  case Screen::ConfirmFormat:
+  case Screen::ConfirmErase:
     if (detents != 0)
     {
       confirmYes_ = !confirmYes_;
@@ -218,7 +218,7 @@ MenuRequest Menu::Update(int detents, Button::Event buttonEvent)
     {
       if (confirmYes_)
       {
-        request.action = MenuAction::FormatCard;
+        request.action = MenuAction::EraseLogs;
       }
       else
       {
@@ -264,9 +264,9 @@ MenuView Menu::View() const
     view.field = field_;
     break;
 
-  case Screen::ConfirmFormat:
+  case Screen::ConfirmErase:
     view.mode = MenuView::Mode::Confirm;
-    view.title = "FORMAT CARD";
+    view.title = "ERASE LOGS";
     view.message = "Erase all logs?";
     view.items = kConfirmItems;
     view.itemCount = 2;

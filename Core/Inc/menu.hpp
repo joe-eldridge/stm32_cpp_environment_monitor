@@ -15,7 +15,7 @@ enum class MenuAction : std::uint8_t
   None,
   SetTime,    // write `time` to the RTC
   EjectCard,  // flush and unmount, so the card can be pulled
-  FormatCard, // erase and make a new filesystem
+  EraseLogs,  // delete the log file
   Close,      // leave the menu and go back to sleep
 };
 
@@ -82,7 +82,7 @@ public:
   MenuRequest Update(int detents, Button::Event buttonEvent);
 
   // Reports the outcome of the last request as a line to show until the user
-  // clicks. The caller words it for either outcome ("Card ejected", "Format
+  // clicks. The caller words it for either outcome ("Card ejected", "Erase
   // failed"), so the menu needs no view on what went wrong. `message` must
   // outlive the menu, which in practice means a literal.
   void Complete(const char *message);
@@ -98,7 +98,7 @@ private:
   {
     Root,
     TimeEdit,
-    ConfirmFormat,
+    ConfirmErase,
     Result,
   };
 

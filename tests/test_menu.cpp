@@ -93,11 +93,11 @@ TEST(MenuTest, EjectingAsksTheApplicationStraightAway)
   EXPECT_EQ(menu.View().mode, MenuView::Mode::List);
 }
 
-TEST(MenuTest, FormattingAsksFirstAndStartsOnNo)
+TEST(MenuTest, ErasingAsksFirstAndStartsOnNo)
 {
   Menu menu;
   menu.Open(Sample());
-  EXPECT_EQ(Choose(menu, "Format card").action, MenuAction::None);
+  EXPECT_EQ(Choose(menu, "Erase logs").action, MenuAction::None);
 
   const MenuView view = menu.View();
   EXPECT_EQ(view.mode, MenuView::Mode::Confirm);
@@ -105,30 +105,30 @@ TEST(MenuTest, FormattingAsksFirstAndStartsOnNo)
   EXPECT_STREQ(view.items[view.selected], "No");
 }
 
-TEST(MenuTest, ConfirmingFormatRequestsIt)
+TEST(MenuTest, ConfirmingEraseRequestsIt)
 {
   Menu menu;
   menu.Open(Sample());
-  Choose(menu, "Format card");
+  Choose(menu, "Erase logs");
   menu.Update(1, kNothing); // to "Yes"
   ASSERT_STREQ(menu.View().items[menu.View().selected], "Yes");
-  EXPECT_EQ(menu.Update(0, kClick).action, MenuAction::FormatCard);
+  EXPECT_EQ(menu.Update(0, kClick).action, MenuAction::EraseLogs);
 }
 
-TEST(MenuTest, DecliningFormatGoesBackWithoutFormatting)
+TEST(MenuTest, DecliningEraseGoesBackWithoutErasing)
 {
   Menu menu;
   menu.Open(Sample());
-  Choose(menu, "Format card");
+  Choose(menu, "Erase logs");
   EXPECT_EQ(menu.Update(0, kClick).action, MenuAction::None);
   EXPECT_EQ(menu.View().mode, MenuView::Mode::List);
 }
 
-TEST(MenuTest, HoldingBacksOutOfAConfirmationWithoutFormatting)
+TEST(MenuTest, HoldingBacksOutOfAConfirmationWithoutErasing)
 {
   Menu menu;
   menu.Open(Sample());
-  Choose(menu, "Format card");
+  Choose(menu, "Erase logs");
   menu.Update(1, kNothing); // sitting on "Yes"
   EXPECT_EQ(menu.Update(0, kHold).action, MenuAction::None);
   EXPECT_EQ(menu.View().mode, MenuView::Mode::List);
@@ -139,10 +139,10 @@ TEST(MenuTest, ConfirmationStartsOnNoEachTimeItIsOpened)
 {
   Menu menu;
   menu.Open(Sample());
-  Choose(menu, "Format card");
+  Choose(menu, "Erase logs");
   menu.Update(1, kNothing); // "Yes"
   menu.Update(0, kHold);    // back out
-  Choose(menu, "Format card");
+  Choose(menu, "Erase logs");
   EXPECT_STREQ(menu.View().items[menu.View().selected], "No");
 }
 

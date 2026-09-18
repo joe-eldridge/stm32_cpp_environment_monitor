@@ -140,13 +140,13 @@ TEST(MenuScreenDraw, EveryModeDrawsSomethingAndFitsTheScreen)
   EXPECT_GT(canvas.BlackInRows(0, Ssd1681::kHeight - 1), 100);
 
   menu.Update(0, Button::Event::LongPress); // back to the list
-  menu.Update(2, Button::Event::None);      // Format card
+  menu.Update(2, Button::Event::None);      // Erase logs
   menu.Update(0, Button::Event::Click);
   ASSERT_EQ(menu.View().mode, MenuView::Mode::Confirm);
   DrawMenuScreen(canvas.Get(), menu.View());
   EXPECT_GT(canvas.BlackInRows(0, Ssd1681::kHeight - 1), 100);
 
-  menu.Complete("Card formatted");
+  menu.Complete("Logs erased");
   ASSERT_EQ(menu.View().mode, MenuView::Mode::Message);
   DrawMenuScreen(canvas.Get(), menu.View());
   EXPECT_GT(canvas.BlackInRows(0, Ssd1681::kHeight - 1), 100);
