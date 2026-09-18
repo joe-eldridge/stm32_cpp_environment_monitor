@@ -81,6 +81,14 @@ public:
     return lastRefreshMs_;
   }
 
+  // How long the last Wake() took: the reset pulse, the settling delays, the
+  // controller's own software reset and the configuration. A fixed cost on
+  // every update, so worth knowing next to the refresh itself.
+  std::uint32_t LastWakeMs() const
+  {
+    return lastWakeMs_;
+  }
+
   // The tick at which the last refresh finished - the moment the new image
   // was actually on the panel. Anything sent after it doesn't delay what the
   // user sees, so it's the end point for measuring responsiveness.
@@ -131,6 +139,7 @@ private:
 
   std::uint32_t lastRefreshMs_ = 0;
   std::uint32_t lastRefreshEndedAt_ = 0;
+  std::uint32_t lastWakeMs_ = 0;
 
   SpiDevice &spi_;
   OutputPin &dataCommand_;

@@ -308,17 +308,31 @@ void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin
     // moving about within the menu is partial, which is far quicker.
     const Ssd1681::RefreshMode mode = firstDraw ? Ssd1681::RefreshMode::Full : Ssd1681::RefreshMode::Partial;
     const std::uint32_t startedMs = HAL_GetTick();
-    const bool updated = display.Update(mode, [&view](MonoFramebuffer &c) { DrawMenuScreen(c, view); });
+    std::uint32_t drawMs = 0;
+    const bool updated = display.Update(mode, [&view, &drawMs](MonoFramebuffer &c) {
+      const std::uint32_t drawStartedMs = HAL_GetTick();
+      DrawMenuScreen(c, view);
+      drawMs = HAL_GetTick() - drawStartedMs;
+    });
     // "Shown" is what the user waits for: from the input being handled to
     // the new image being on the panel. "Done" adds whatever is sent after
     // that, which delays nothing visible.
     const std::uint32_t doneMs = HAL_GetTick() - startedMs;
     const std::uint32_t shownMs = panel.LastRefreshMs() != 0 ? panel.LastRefreshEndedAt() - startedMs : doneMs;
+    // Where "shown" goes: drawing into the framebuffer, waking the panel, the
+    // panel's own waveform, and the rest - comparing images and sending rows.
+    const std::uint32_t accountedMs = drawMs + panel.LastWakeMs() + panel.LastRefreshMs();
     WakeLog(firstDraw ? "\r\nMenu full: shown " : "\r\nMenu partial: shown ");
     WakeLogDecimal(static_cast<std::int32_t>(shownMs));
-    WakeLog("ms (panel ");
+    WakeLog("ms = draw ");
+    WakeLogDecimal(static_cast<std::int32_t>(drawMs));
+    WakeLog(" + wake ");
+    WakeLogDecimal(static_cast<std::int32_t>(panel.LastWakeMs()));
+    WakeLog(" + panel ");
     WakeLogDecimal(static_cast<std::int32_t>(panel.LastRefreshMs()));
-    WakeLog("ms), done ");
+    WakeLog(" + rest ");
+    WakeLogDecimal(static_cast<std::int32_t>(shownMs > accountedMs ? shownMs - accountedMs : 0));
+    WakeLog(", done ");
     WakeLogDecimal(static_cast<std::int32_t>(doneMs));
     WakeLog(updated ? "ms" : "ms FAILED");
     WakeLog(what);

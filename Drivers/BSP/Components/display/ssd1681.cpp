@@ -49,6 +49,8 @@ bool Ssd1681::Wake()
   // Every update starts here, so this is where the last update's refresh
   // timing stops being true.
   lastRefreshMs_ = 0;
+  lastWakeMs_ = 0;
+  const std::uint32_t wakeStartedMs = HAL_GetTick();
 
   reset_.Write(false);
   DelayMs(kResetStepMs);
@@ -77,12 +79,14 @@ bool Ssd1681::Wake()
   const std::uint8_t border[] = {0x05};
   const std::uint8_t internalTemperatureSensor[] = {0x80};
 
-  return Command(kCmdDriverOutputControl, driverOutput, sizeof(driverOutput)) &&
-         Command(kCmdDataEntryMode, dataEntry, sizeof(dataEntry)) &&
-         Command(kCmdRamXWindow, xWindow, sizeof(xWindow)) &&
-         Command(kCmdRamYWindow, yWindow, sizeof(yWindow)) &&
-         Command(kCmdBorderWaveform, border, sizeof(border)) &&
-         Command(kCmdTemperatureSensor, internalTemperatureSensor, sizeof(internalTemperatureSensor));
+  const bool configured =
+      Command(kCmdDriverOutputControl, driverOutput, sizeof(driverOutput)) &&
+      Command(kCmdDataEntryMode, dataEntry, sizeof(dataEntry)) &&
+      Command(kCmdRamXWindow, xWindow, sizeof(xWindow)) && Command(kCmdRamYWindow, yWindow, sizeof(yWindow)) &&
+      Command(kCmdBorderWaveform, border, sizeof(border)) &&
+      Command(kCmdTemperatureSensor, internalTemperatureSensor, sizeof(internalTemperatureSensor));
+  lastWakeMs_ = HAL_GetTick() - wakeStartedMs;
+  return configured;
 }
 
 bool Ssd1681::WriteRam(std::uint8_t ramCommand, const std::uint8_t *image, RowRange rows)
