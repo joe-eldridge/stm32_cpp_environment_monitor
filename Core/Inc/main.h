@@ -77,6 +77,15 @@ void Error_Handler(void);
 #define DS3231_SQW_Pin GPIO_PIN_0
 #define DS3231_SQW_GPIO_Port GPIOC
 #define DS3231_SQW_EXTI_IRQn EXTI0_1_IRQn
+#define ENC_CLK_Pin GPIO_PIN_1
+#define ENC_CLK_GPIO_Port GPIOC
+#define ENC_CLK_EXTI_IRQn EXTI0_1_IRQn
+#define ENC_DT_Pin GPIO_PIN_2
+#define ENC_DT_GPIO_Port GPIOC
+#define ENC_DT_EXTI_IRQn EXTI2_3_IRQn
+#define ENC_SW_Pin GPIO_PIN_3
+#define ENC_SW_GPIO_Port GPIOC
+#define ENC_SW_EXTI_IRQn EXTI2_3_IRQn
 #define USART_TX_Pin GPIO_PIN_2
 #define USART_TX_GPIO_Port GPIOA
 #define USART_RX_Pin GPIO_PIN_3

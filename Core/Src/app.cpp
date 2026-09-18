@@ -6,7 +6,9 @@
 #include <optional>
 
 #include "bme280.hpp"
+#include "button.hpp"
 #include "build_config.hpp"
+#include "delay.hpp"
 #include "ds3231.hpp"
 #include "epaper_display.hpp"
 #include "fat_time.hpp"
@@ -16,10 +18,16 @@
 #include "hourly_history.hpp"
 #include "i2c_fault_injection.hpp"
 #include "main_screen.hpp"
+#include "menu.hpp"
+#include "menu_screen.hpp"
 #include "low_power.hpp"
 #include "main.h"
 #include "mono_framebuffer.hpp"
+#include "rotary_encoder.hpp"
+#include "sdcard_diskio.h"
 #include "spi_bus.hpp"
+#include "stm32l0xx_ll_exti.h"
+#include "text_format.hpp"
 #include "time_sync.hpp"
 #include "trend_screen.hpp"
 #include "veml7700.hpp"
@@ -54,7 +62,7 @@ constexpr std::uint32_t kSamplesPerFullRefresh = 60;
 // plotted on the trend screen - so an hour each, covering a day. Shorten it
 // (to 1, say) to watch the plot fill during testing; the trend screen then
 // replaces the main screen on nearly every wake.
-constexpr std::uint16_t kTrendPeriodMinutes = 1;
+constexpr std::uint16_t kTrendPeriodMinutes = 60;
 
 // Which metric the trend screen plots. The planned encoder menu will make
 // this switchable at runtime.
@@ -63,8 +71,80 @@ constexpr Metric kTrendMetric = Metric::Temperature;
 // A day of averages, about 700 bytes - static rather than on the 1 KB stack.
 HourlyHistory g_history(kTrendPeriodMinutes);
 
-// The display framebuffer: 5 KB, static so it isn't on the 1 KB stack.
+// Quadrature steps per detent of the encoder: four transitions, as the part
+// is built. Its datasheet is no help, quoting both 20 pulses and 30
+// positions per revolution, so this was settled on the bench. Two appeared
+// right while the encoder was polled, because a 2ms poll misses about half
+// the transitions; decoding in the interrupt sees all four.
+constexpr std::uint8_t kEncoderStepsPerDetent = 4;
+
+// How often the switch is sampled while the menu is open. The knob is not
+// polled at all - it is decoded in its interrupt - but a button is a level
+// to debounce rather than edges to catch, and polling it needs no interrupt
+// of its own.
+constexpr std::uint32_t kMenuPollMs = 2;
+
+// The menu closes itself if it is left untouched, so a knocked knob can't
+// hold the device awake and flatten the battery.
+constexpr std::uint32_t kMenuIdleTimeoutMs = 30000;
+
+// A panel refresh takes the best part of a second, during which nothing can
+// be polled. Waiting for the input to stop before redrawing means spinning
+// the knob past three items costs one refresh rather than three, so the
+// screen catches up with the knob instead of trailing it.
+constexpr std::uint32_t kMenuRedrawQuietMs = 150;
+
+// Menu messages are shown until dismissed, so one that isn't a literal needs
+// somewhere to live that outlives the request that built it.
+char g_menuMessage[20] = "";
+
+// Set from the encoder switch's interrupt. Its only job is to wake the MCU
+// from Stop mode and say why it woke.
+volatile bool g_menuRequested = false;
+
+// The encoder is decoded in the interrupt rather than polled. A display
+// refresh blocks the main loop for the best part of a second, and a knob
+// turned during one used to be lost entirely; the interrupt catches every
+// edge whatever the loop is doing.
+RotaryEncoder g_encoder(kEncoderStepsPerDetent);
+volatile std::int32_t g_detents = 0;
+
+// Takes what the encoder has decoded since the last call. Interrupts are held
+// off for the read and clear together, so a detent arriving in between can't
+// be dropped.
+int TakeDetents()
+{
+  // Saved and restored rather than simply re-enabled: this must not turn
+  // interrupts on for a caller that had deliberately turned them off.
+  const std::uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  const int detents = static_cast<int>(g_detents);
+  g_detents = 0;
+  __set_PRIMASK(primask);
+  return detents;
+}
+
+// The encoder's interrupts are on only while the menu is open. Left enabled,
+// a knocked knob would wake the MCU out of Stop mode and cost a wake cycle
+// for nothing.
+void SetEncoderInterrupts(bool enabled)
+{
+  if (enabled)
+  {
+    __HAL_GPIO_EXTI_CLEAR_IT(ENC_CLK_Pin | ENC_DT_Pin); // whatever happened while off isn't news
+    LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_1 | LL_EXTI_LINE_2);
+  }
+  else
+  {
+    LL_EXTI_DisableIT_0_31(LL_EXTI_LINE_1 | LL_EXTI_LINE_2);
+  }
+}
+
+// The display framebuffer and a copy of what the panel is showing: 5 KB
+// each, static so they aren't on the 1 KB stack. The second copy is what
+// lets an update send only the rows that changed.
 std::array<std::uint8_t, Ssd1681::kImageBytes> g_frame{};
+std::array<std::uint8_t, Ssd1681::kImageBytes> g_panelImage{};
 static_assert(MonoFramebuffer::BufferSize(Ssd1681::kWidth, Ssd1681::kHeight) == Ssd1681::kImageBytes);
 
 // Set once the RTC is up, so FatFs's get_fattime() hook can timestamp files.
@@ -199,7 +279,175 @@ bool LogRecord(const std::optional<Ds3231::DateTime> &dt, const std::optional<Bm
   return true;
 }
 
+// Runs the menu to its end: polls the encoder and switch, redraws when
+// something changes, and carries out what the menu asks for. Returns when
+// the menu closes or is left untouched for kMenuIdleTimeoutMs.
+void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin &clk, InputPin &dt, InputPin &sw)
+{
+  Menu menu;
+  const std::optional<Ds3231::DateTime> now = rtc.ReadDateTime();
+  if (!now)
+  {
+    // Without the time there is nothing to seed the clock editor with, and
+    // the RTC is the one thing the menu can't work around.
+    WakeLog(" MenuSkipped(rtc)");
+    return;
+  }
+  menu.Open(*now);
+
+  // Start from where the knob is sitting, and throw away anything decoded
+  // before the menu opened.
+  g_encoder.Reset(clk.IsHigh(), dt.IsHigh());
+  static_cast<void>(TakeDetents());
+  SetEncoderInterrupts(true);
+
+  Button button;
+  // The switch that woke the MCU is usually still down: adopt it, or its
+  // release would open the menu and immediately act on it.
+  button.Reset(!sw.IsHigh(), HAL_GetTick());
+
+  bool firstDraw = true;
+  const auto drawMenu = [&display, &panel, &menu, &firstDraw](const char *what) {
+    const MenuView view = menu.View();
+    // The first draw replaces a whole different screen, so it is full;
+    // moving about within the menu is partial, which is far quicker.
+    const Ssd1681::RefreshMode mode = firstDraw ? Ssd1681::RefreshMode::Full : Ssd1681::RefreshMode::Partial;
+    const std::uint32_t startedMs = HAL_GetTick();
+    const bool updated = display.Update(mode, [&view](MonoFramebuffer &c) { DrawMenuScreen(c, view); });
+    const std::uint32_t totalMs = HAL_GetTick() - startedMs;
+    WakeLog(firstDraw ? "\r\nMenu full refresh " : "\r\nMenu partial refresh ");
+    WakeLogDecimal(static_cast<std::int32_t>(totalMs));
+    WakeLog("ms (panel ");
+    WakeLogDecimal(static_cast<std::int32_t>(panel.LastRefreshMs()));
+    WakeLog("ms, transfers ");
+    WakeLogDecimal(static_cast<std::int32_t>(totalMs - panel.LastRefreshMs()));
+    WakeLog(updated ? "ms)" : "ms) FAILED");
+    WakeLog(what);
+    firstDraw = false;
+  };
+
+  bool redraw = true;
+  std::uint32_t lastInputMs = HAL_GetTick();
+  // The opening screen is drawn at once; the quiet period only applies to
+  // changes made from inside the menu.
+  std::uint32_t lastChangeMs = HAL_GetTick() - kMenuRedrawQuietMs;
+
+  while (menu.IsOpen())
+  {
+    if (redraw && HAL_GetTick() - lastChangeMs >= kMenuRedrawQuietMs)
+    {
+      drawMenu("");
+      redraw = false;
+      // Nothing is polled during a refresh, so the switch starts again from
+      // where it is now. The knob needs no such treatment: its interrupts
+      // kept running throughout, and what it did is waiting to be read.
+      button.Reset(!sw.IsHigh(), HAL_GetTick());
+      lastInputMs = HAL_GetTick();
+    }
+
+    const int detents = TakeDetents();
+    const Button::Event event = button.Update(!sw.IsHigh(), HAL_GetTick()); // active low, with a pull-up
+    if (detents != 0 || event != Button::Event::None)
+    {
+      lastInputMs = HAL_GetTick();
+      lastChangeMs = lastInputMs;
+      redraw = true;
+    }
+
+    const MenuRequest request = menu.Update(detents, event);
+    switch (request.action)
+    {
+    case MenuAction::SetTime:
+      menu.Complete(rtc.SetDateTime(request.time) && rtc.ClearOscillatorStopFlag() ? "Clock set" : "Clock NOT set");
+      break;
+
+    case MenuAction::EjectCard:
+      // Unregister the volume and let go of the card, so what FatFs has
+      // buffered is on it before it's pulled.
+      static_cast<void>(f_mount(nullptr, USERPath, 0));
+      SdCard_Deinit();
+      menu.Complete("Safe to remove");
+      break;
+
+    case MenuAction::EraseLogs:
+    {
+      // Deleting the file, not rebuilding the filesystem. Making a new
+      // filesystem means writing out the whole FAT, which on a 16GB card at
+      // this bus speed takes over ten minutes; unlinking one file takes
+      // milliseconds and is what "erase all logs" actually means. A card
+      // that needs a real format is a job for a PC.
+      const FRESULT result = f_unlink(kLogFileName);
+      WakeLog(" erase FRESULT ");
+      WakeLogDecimal(static_cast<std::int32_t>(result));
+      if (result == FR_OK)
+      {
+        menu.Complete("Logs erased");
+      }
+      else if (result == FR_NO_FILE)
+      {
+        menu.Complete("No logs to erase");
+      }
+      else
+      {
+        char code[4] = "";
+        static_cast<void>(text_format::Integer(code, sizeof(code), static_cast<std::int32_t>(result)));
+        text_format::Copy(g_menuMessage, sizeof(g_menuMessage), "Erase failed ");
+        text_format::Append(g_menuMessage, sizeof(g_menuMessage), code);
+        menu.Complete(g_menuMessage);
+      }
+      break;
+    }
+
+    case MenuAction::Close:
+    case MenuAction::None:
+      break;
+    }
+
+    if (request.action != MenuAction::None && request.action != MenuAction::Close)
+    {
+      // An outcome is worth showing at once rather than after the quiet
+      // period: the user is waiting on it, and no more input is coming.
+      redraw = true;
+      lastChangeMs = HAL_GetTick() - kMenuRedrawQuietMs;
+      continue;
+    }
+
+    if (HAL_GetTick() - lastInputMs >= kMenuIdleTimeoutMs)
+    {
+      WakeLog(" MenuTimedOut");
+      break;
+    }
+
+    DelayMs(kMenuPollMs);
+  }
+
+  SetEncoderInterrupts(false);
+
+  // The card is registered again on the way out, whichever way the menu was
+  // left, so the next sample logs as usual. This doesn't touch the card, so
+  // it works with the card still out.
+  static_cast<void>(f_mount(&USERFatFS, USERPath, 0));
+}
+
 } // namespace
+
+extern "C" void HAL_GPIO_EXTI_Callback(std::uint16_t GPIO_Pin)
+{
+  // The RTC alarm on PC0 also lands here; it needs no handling beyond
+  // having woken the MCU.
+  if (GPIO_Pin == ENC_SW_Pin)
+  {
+    g_menuRequested = true;
+  }
+  else if (GPIO_Pin == ENC_CLK_Pin || GPIO_Pin == ENC_DT_Pin)
+  {
+    // Both lines are read on either line's edge: what the decoder needs is
+    // the pair, not which of them moved.
+    const bool clk = HAL_GPIO_ReadPin(ENC_CLK_GPIO_Port, ENC_CLK_Pin) == GPIO_PIN_SET;
+    const bool dt = HAL_GPIO_ReadPin(ENC_DT_GPIO_Port, ENC_DT_Pin) == GPIO_PIN_SET;
+    g_detents += g_encoder.Update(clk, dt);
+  }
+}
 
 std::uint32_t AppGetFatTime()
 {
@@ -290,10 +538,24 @@ void AppMain()
   HalInputPin einkBusy(eInk_BUSY_GPIO_Port, eInk_BUSY_Pin);
   Ssd1681 panel(einkSpi, einkDataCommand, einkReset, einkBusy);
   MonoFramebuffer canvas(g_frame.data(), Ssd1681::kWidth, Ssd1681::kHeight);
-  EpaperDisplay display(panel, canvas);
+  EpaperDisplay display(panel, canvas, g_panelImage.data());
+
+  // The SPI bit rate sets how long a 5KB image takes to send, so it is worth
+  // knowing exactly rather than inferring it from the clock tree.
+  WakeLog("\r\nSPI1 baud rate divider: 1/");
+  WakeLogDecimal(static_cast<std::int32_t>(2u << ((SPI1->CR1 >> 3) & 0x7u)));
+  WakeLog(", PCLK2 ");
+  WakeLogDecimal(static_cast<std::int32_t>(HAL_RCC_GetPCLK2Freq()));
+  WakeLog("Hz");
 
   MX_FATFS_Init();
-  if (f_mount(&USERFatFS, USERPath, 1) != FR_OK)
+  const FRESULT mounted = f_mount(&USERFatFS, USERPath, 1);
+  const SdCardInitReport initReport = SdCard_GetInitReport();
+  SendLine("\r\nSD init took ");
+  SendDecimal(static_cast<std::int32_t>(initReport.durationMs));
+  SendLine("ms, reached ");
+  SendLine(initReport.stage);
+  if (mounted != FR_OK)
   {
     // Not fatal: sensor sampling and Stop-mode sleep/wake still work
     // without a card, and each LogRecord() retries the mount, so logging
@@ -301,9 +563,18 @@ void AppMain()
     SendLine("\r\nSD mount failed - will retry each wake");
   }
 
+  // CubeMX enables both encoder EXTI lines at init; they stay masked until
+  // the menu opens.
+  SetEncoderInterrupts(false);
+
+  HalInputPin encoderClk(ENC_CLK_GPIO_Port, ENC_CLK_Pin);
+  HalInputPin encoderDt(ENC_DT_GPIO_Port, ENC_DT_Pin);
+  HalInputPin encoderSwitch(ENC_SW_GPIO_Port, ENC_SW_Pin);
+
   // Sample 0 is taken straight after boot, so the screen shows real values
   // from the start; every later sample follows an RTC alarm wake.
   bool wasTrendScreen = false;
+  bool leftMenu = false;
   for (std::uint32_t sample = 0;; ++sample)
   {
     WakeLog("\r\nSample #");
@@ -367,7 +638,8 @@ void AppMain()
     // The first update after boot is always full (EpaperDisplay enforces it),
     // clearing whatever the panel showed before. A failure isn't fatal:
     // sampling and logging carry on.
-    const bool fullRefresh = periodEnded || wasTrendScreen || (sample % kSamplesPerFullRefresh == 0);
+    const bool fullRefresh =
+        periodEnded || wasTrendScreen || leftMenu || (sample % kSamplesPerFullRefresh == 0);
     const Ssd1681::RefreshMode mode = fullRefresh ? Ssd1681::RefreshMode::Full : Ssd1681::RefreshMode::Partial;
     const bool updated = periodEnded
                              ? display.Update(mode, [&trend](MonoFramebuffer &c) { DrawTrendScreen(c, trend); })
@@ -377,6 +649,21 @@ void AppMain()
       WakeLog(" DisplayFailed");
     }
     wasTrendScreen = periodEnded;
+    leftMenu = false;
+
+    // A press while the device was awake is honoured here rather than being
+    // held over until after the next alarm, when it would look like the
+    // menu had opened by itself.
+    if (g_menuRequested)
+    {
+      WakeLog("\r\nMenu opened");
+      RunMenu(rtc, display, panel, encoderClk, encoderDt, encoderSwitch);
+      leftMenu = true;
+      // Every press inside the menu re-raises the interrupt, so the flag is
+      // cleared on the way out rather than on the way in - otherwise the
+      // menu would reopen the moment it was closed.
+      g_menuRequested = false;
+    }
 
     if (!rtc.ScheduleNextAlarm(kWakeIntervalMinutes))
     {
@@ -405,6 +692,20 @@ void AppMain()
       // Alarm flag stuck set means SQW/INT stays asserted and this loop
       // would spin through Stop mode with no real sleep ever happening.
       HaltWithError();
+    }
+
+    // Woken by the encoder switch rather than the alarm: show the menu, then
+    // carry on round the loop, which takes a fresh sample and re-arms the
+    // alarm.
+    if (g_menuRequested)
+    {
+      WakeLog("\r\nMenu opened");
+      RunMenu(rtc, display, panel, encoderClk, encoderDt, encoderSwitch);
+      leftMenu = true;
+      // Every press inside the menu re-raises the interrupt, so the flag is
+      // cleared on the way out rather than on the way in - otherwise the
+      // menu would reopen the moment it was closed.
+      g_menuRequested = false;
     }
   }
 }
