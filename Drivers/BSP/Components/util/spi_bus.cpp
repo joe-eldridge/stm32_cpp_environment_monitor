@@ -24,9 +24,30 @@ void SpiBus::Deselect()
   HAL_GPIO_WritePin(csPort_, csPin_, GPIO_PIN_SET);
 }
 
+void SpiBus::WaitUntilTransferComplete()
+{
+  // The reference manual's procedure for disabling SPI: the last frame must
+  // have finished shifting out (TXE set, BSY clear) first. Clearing SPE part
+  // way through a frame stops the clock mid-byte, which leaves the peripheral
+  // and whatever it was talking to out of step - the card's next command is
+  // misread, and the display misses the commands after it.
+  //
+  // Every transfer here ends by reading the byte back, so RXNE is already
+  // clear, which is the other half of that procedure.
+  const Timeout timeout(kByteTimeoutMs);
+  while (!LL_SPI_IsActiveFlag_TXE(spi_) || LL_SPI_IsActiveFlag_BSY(spi_))
+  {
+    if (timeout.Expired())
+    {
+      return; // a peripheral this stuck won't be fixed by waiting longer
+    }
+  }
+}
+
 void SpiBus::SetPrescaler(std::uint32_t prescaler)
 {
   // BR bits are only writable while SPE=0, per the reference manual.
+  WaitUntilTransferComplete();
   LL_SPI_Disable(spi_);
   LL_SPI_SetBaudRatePrescaler(spi_, prescaler);
   LL_SPI_Enable(spi_);
@@ -34,9 +55,11 @@ void SpiBus::SetPrescaler(std::uint32_t prescaler)
 
 void SpiBus::SetSlow()
 {
-  // MSI-derived SPI1 kernel clock (~2.1MHz) / 256 ~= 8kHz - comfortably
-  // under the SD card's 400kHz native-mode init ceiling.
-  SetPrescaler(LL_SPI_BAUDRATEPRESCALER_DIV256);
+  // The SD spec gives identification mode a window, not a ceiling: 100kHz to
+  // 400kHz. From a ~2.1MHz kernel clock, /8 lands at ~262kHz, in the middle
+  // of it. /256 (~8kHz) is not "even safer" - it is below the minimum, and
+  // cards differ in whether they tolerate that.
+  SetPrescaler(LL_SPI_BAUDRATEPRESCALER_DIV8);
 }
 
 void SpiBus::SetFast()
@@ -48,7 +71,12 @@ void SpiBus::SetFast()
 
 bool SpiBus::TransferByte(std::uint8_t txByte, std::uint8_t &rxByte)
 {
-  Timeout timeout(kByteTimeoutMs);
+  const Timeout timeout(kByteTimeoutMs);
+  return TransferByteWithin(timeout, txByte, rxByte);
+}
+
+bool SpiBus::TransferByteWithin(const Timeout &timeout, std::uint8_t txByte, std::uint8_t &rxByte)
+{
   while (!LL_SPI_IsActiveFlag_TXE(spi_))
   {
     if (timeout.Expired())
@@ -74,11 +102,14 @@ bool SpiBus::Write(const std::uint8_t *data, std::size_t length)
   Select();
   bool ok = true;
   std::uint8_t discarded;
+  // One Timeout for the whole block: built per byte, its HAL_GetTick() calls
+  // cost more than the transfer they are guarding when 5KB goes out at a time.
+  const Timeout timeout(kBlockTimeoutMs);
   for (std::size_t i = 0; i < length && ok; ++i)
   {
     // Full duplex: reading each byte back keeps RXNE clear, so no overrun
     // is left behind for the next device on the bus (the SD card reads).
-    ok = TransferByte(data[i], discarded);
+    ok = TransferByteWithin(timeout, data[i], discarded);
   }
   Deselect();
   return ok;

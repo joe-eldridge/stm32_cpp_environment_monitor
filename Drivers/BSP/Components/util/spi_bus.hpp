@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "spi_device.hpp"
+#include "timeout.hpp"
 #include "stm32l0xx_hal.h"
 #include "stm32l0xx_ll_spi.h"
 
@@ -55,8 +56,16 @@ public:
 
 private:
   void SetPrescaler(std::uint32_t prescaler);
+  void WaitUntilTransferComplete();
+  bool TransferByteWithin(const Timeout &timeout, std::uint8_t txByte, std::uint8_t &rxByte);
 
   static constexpr std::uint32_t kByteTimeoutMs = 5;
+
+  // One budget for a whole block rather than per byte. It is there to catch
+  // a bus that has stopped, not to police how fast it runs, so it is loose:
+  // a 5KB image takes well under a second even with the polling overhead.
+  static constexpr std::uint32_t kBlockTimeoutMs = 5000;
+
 
   SPI_TypeDef *spi_;
   GPIO_TypeDef *csPort_;
