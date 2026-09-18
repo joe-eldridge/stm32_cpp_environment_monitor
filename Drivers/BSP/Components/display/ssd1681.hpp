@@ -18,7 +18,32 @@ class Ssd1681
 public:
   static constexpr std::uint16_t kWidth = 200;
   static constexpr std::uint16_t kHeight = 200;
-  static constexpr std::size_t kImageBytes = ((kWidth + 7u) / 8u) * kHeight;
+  static constexpr std::size_t kBytesPerRow = (kWidth + 7u) / 8u;
+  static constexpr std::size_t kImageBytes = kBytesPerRow * kHeight;
+
+  // A band of rows to write and refresh, both ends included. Sending only
+  // the rows that changed is worth doing: at this bus speed a whole image
+  // takes longer to send than the panel takes to show it.
+  struct RowRange
+  {
+    std::uint16_t first;
+    std::uint16_t last;
+
+    static constexpr RowRange All()
+    {
+      return RowRange{0, kHeight - 1};
+    }
+
+    constexpr std::uint16_t Rows() const
+    {
+      return static_cast<std::uint16_t>(last - first + 1);
+    }
+
+    constexpr std::size_t Bytes() const
+    {
+      return Rows() * kBytesPerRow;
+    }
+  };
 
   enum class RefreshMode : std::uint8_t
   {
@@ -35,15 +60,25 @@ public:
   // reset, then panel configuration. Leaves the controller awake.
   [[nodiscard]] bool Wake();
 
-  // The image to show on the next refresh (BW RAM, command 0x24).
-  [[nodiscard]] bool WriteImage(const std::uint8_t *image);
+  // The image to show on the next refresh (BW RAM, command 0x24). `image`
+  // always points at a whole 200x200 image; only `rows` of it are sent, and
+  // the next refresh drives only those rows.
+  [[nodiscard]] bool WriteImage(const std::uint8_t *image, RowRange rows = RowRange::All());
 
   // The image currently on the panel (RED RAM, command 0x26). A partial
   // refresh drives only the pixels that differ between the two.
-  [[nodiscard]] bool WritePreviousImage(const std::uint8_t *image);
+  [[nodiscard]] bool WritePreviousImage(const std::uint8_t *image, RowRange rows = RowRange::All());
 
   // Drives the panel and blocks until the controller reports it's done.
   [[nodiscard]] bool Refresh(RefreshMode mode);
+
+  // How long the last Refresh() spent waiting for the panel, in milliseconds.
+  // The waveform time is the panel's own and can't be shortened from here, so
+  // it's worth telling apart from the time spent sending images to it.
+  std::uint32_t LastRefreshMs() const
+  {
+    return lastRefreshMs_;
+  }
 
   // Deep sleep mode 1: about 1 uA, RAM contents kept. Only Wake() exits it.
   [[nodiscard]] bool Sleep();
@@ -51,7 +86,7 @@ public:
 private:
   [[nodiscard]] bool Command(std::uint8_t command);
   [[nodiscard]] bool Command(std::uint8_t command, const std::uint8_t *data, std::size_t length);
-  [[nodiscard]] bool WriteRam(std::uint8_t ramCommand, const std::uint8_t *image);
+  [[nodiscard]] bool WriteRam(std::uint8_t ramCommand, const std::uint8_t *image, RowRange rows);
   [[nodiscard]] bool WaitUntilIdle(std::uint32_t timeoutMs);
 
   static constexpr std::uint8_t kCmdDriverOutputControl = 0x01;
@@ -81,6 +116,8 @@ private:
   static constexpr std::uint32_t kResetTimeoutMs = 1000;
   // A full refresh takes a few seconds; this only bounds a stuck BUSY line.
   static constexpr std::uint32_t kRefreshTimeoutMs = 10000;
+
+  std::uint32_t lastRefreshMs_ = 0;
 
   SpiDevice &spi_;
   OutputPin &dataCommand_;

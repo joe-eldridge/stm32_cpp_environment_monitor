@@ -111,17 +111,46 @@ TEST_F(Ssd1681Test, WriteImageStartsAtOriginInBlackWhiteRam)
 {
   const Bytes image = Image(0x5A);
   ASSERT_TRUE(panel.WriteImage(image.data()));
-  EXPECT_EQ(spi.Codes(), (Bytes{0x4E, 0x4F, 0x24}));
+  // The row window is set with every write: it bounds the refresh as well as
+  // the RAM, so it can't be left as whatever the last update used.
+  EXPECT_EQ(spi.Codes(), (Bytes{0x45, 0x4E, 0x4F, 0x24}));
+  EXPECT_EQ(spi.LastDataFor(0x45), (Bytes{0x00, 0x00, 0xC7, 0x00}));
   EXPECT_EQ(spi.LastDataFor(0x4E), (Bytes{0x00}));
   EXPECT_EQ(spi.LastDataFor(0x4F), (Bytes{0x00, 0x00}));
   EXPECT_EQ(spi.LastDataFor(0x24), image);
+}
+
+TEST_F(Ssd1681Test, WriteImageSendsOnlyTheRowsAsked)
+{
+  const Bytes image = Image(0x5A);
+  Bytes marked = image;
+  // Mark the first byte of rows 100 and 101 so the right slice is identifiable.
+  marked[100 * Ssd1681::kBytesPerRow] = 0x11;
+  marked[101 * Ssd1681::kBytesPerRow] = 0x22;
+
+  ASSERT_TRUE(panel.WriteImage(marked.data(), Ssd1681::RowRange{100, 101}));
+
+  EXPECT_EQ(spi.LastDataFor(0x45), (Bytes{100, 0, 101, 0}));
+  EXPECT_EQ(spi.LastDataFor(0x4F), (Bytes{100, 0})); // the counter starts in the window
+  const Bytes sent = spi.LastDataFor(0x24);
+  ASSERT_EQ(sent.size(), 2u * Ssd1681::kBytesPerRow);
+  EXPECT_EQ(sent[0], 0x11);
+  EXPECT_EQ(sent[Ssd1681::kBytesPerRow], 0x22);
+}
+
+TEST_F(Ssd1681Test, RowWindowCountsBothEnds)
+{
+  EXPECT_EQ(Ssd1681::RowRange({0, 0}).Rows(), 1);
+  EXPECT_EQ(Ssd1681::RowRange({0, 0}).Bytes(), Ssd1681::kBytesPerRow);
+  EXPECT_EQ(Ssd1681::RowRange::All().Rows(), Ssd1681::kHeight);
+  EXPECT_EQ(Ssd1681::RowRange::All().Bytes(), Ssd1681::kImageBytes);
 }
 
 TEST_F(Ssd1681Test, WritePreviousImageUsesRedRam)
 {
   const Bytes image = Image(0xA5);
   ASSERT_TRUE(panel.WritePreviousImage(image.data()));
-  EXPECT_EQ(spi.Codes(), (Bytes{0x4E, 0x4F, 0x26}));
+  EXPECT_EQ(spi.Codes(), (Bytes{0x45, 0x4E, 0x4F, 0x26}));
   EXPECT_EQ(spi.LastDataFor(0x26), image);
 }
 

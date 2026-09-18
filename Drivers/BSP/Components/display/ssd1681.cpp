@@ -46,6 +46,10 @@ bool Ssd1681::WaitUntilIdle(std::uint32_t timeoutMs)
 
 bool Ssd1681::Wake()
 {
+  // Every update starts here, so this is where the last update's refresh
+  // timing stops being true.
+  lastRefreshMs_ = 0;
+
   reset_.Write(false);
   DelayMs(kResetStepMs);
   reset_.Write(true);
@@ -81,29 +85,43 @@ bool Ssd1681::Wake()
          Command(kCmdTemperatureSensor, internalTemperatureSensor, sizeof(internalTemperatureSensor));
 }
 
-bool Ssd1681::WriteRam(std::uint8_t ramCommand, const std::uint8_t *image)
+bool Ssd1681::WriteRam(std::uint8_t ramCommand, const std::uint8_t *image, RowRange rows)
 {
+  // The Y window bounds both the RAM write and the area the next refresh
+  // drives; X stays the full width, as set in Wake().
+  const std::uint8_t yWindow[] = {static_cast<std::uint8_t>(rows.first & 0xFF),
+                                  static_cast<std::uint8_t>(rows.first >> 8),
+                                  static_cast<std::uint8_t>(rows.last & 0xFF),
+                                  static_cast<std::uint8_t>(rows.last >> 8)};
   const std::uint8_t xStart[] = {0x00};
-  const std::uint8_t yStart[] = {0x00, 0x00};
-  return Command(kCmdRamXCounter, xStart, sizeof(xStart)) && Command(kCmdRamYCounter, yStart, sizeof(yStart)) &&
-         Command(ramCommand, image, kImageBytes);
+  const std::uint8_t yStart[] = {static_cast<std::uint8_t>(rows.first & 0xFF),
+                                 static_cast<std::uint8_t>(rows.first >> 8)};
+  return Command(kCmdRamYWindow, yWindow, sizeof(yWindow)) && Command(kCmdRamXCounter, xStart, sizeof(xStart)) &&
+         Command(kCmdRamYCounter, yStart, sizeof(yStart)) &&
+         Command(ramCommand, image + rows.first * kBytesPerRow, rows.Bytes());
 }
 
-bool Ssd1681::WriteImage(const std::uint8_t *image)
+bool Ssd1681::WriteImage(const std::uint8_t *image, RowRange rows)
 {
-  return WriteRam(kCmdWriteBlackWhiteRam, image);
+  return WriteRam(kCmdWriteBlackWhiteRam, image, rows);
 }
 
-bool Ssd1681::WritePreviousImage(const std::uint8_t *image)
+bool Ssd1681::WritePreviousImage(const std::uint8_t *image, RowRange rows)
 {
-  return WriteRam(kCmdWriteRedRam, image);
+  return WriteRam(kCmdWriteRedRam, image, rows);
 }
 
 bool Ssd1681::Refresh(RefreshMode mode)
 {
   const std::uint8_t sequence[] = {mode == RefreshMode::Full ? kUpdateFull : kUpdatePartial};
-  return Command(kCmdDisplayUpdateControl2, sequence, sizeof(sequence)) && Command(kCmdMasterActivation) &&
-         WaitUntilIdle(kRefreshTimeoutMs);
+  if (!Command(kCmdDisplayUpdateControl2, sequence, sizeof(sequence)) || !Command(kCmdMasterActivation))
+  {
+    return false;
+  }
+  const std::uint32_t startedMs = HAL_GetTick();
+  const bool ok = WaitUntilIdle(kRefreshTimeoutMs);
+  lastRefreshMs_ = HAL_GetTick() - startedMs;
+  return ok;
 }
 
 bool Ssd1681::Sleep()
