@@ -88,11 +88,6 @@ constexpr std::uint32_t kMenuPollMs = 2;
 // hold the device awake and flatten the battery.
 constexpr std::uint32_t kMenuIdleTimeoutMs = 30000;
 
-// A panel refresh takes the best part of a second, during which nothing can
-// be polled. Waiting for the input to stop before redrawing means spinning
-// the knob past three items costs one refresh rather than three, so the
-// screen catches up with the knob instead of trailing it.
-constexpr std::uint32_t kMenuRedrawQuietMs = 150;
 
 // Menu messages are shown until dismissed, so one that isn't a literal needs
 // somewhere to live that outlives the request that built it.
@@ -314,27 +309,33 @@ void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin
     const Ssd1681::RefreshMode mode = firstDraw ? Ssd1681::RefreshMode::Full : Ssd1681::RefreshMode::Partial;
     const std::uint32_t startedMs = HAL_GetTick();
     const bool updated = display.Update(mode, [&view](MonoFramebuffer &c) { DrawMenuScreen(c, view); });
-    const std::uint32_t totalMs = HAL_GetTick() - startedMs;
-    WakeLog(firstDraw ? "\r\nMenu full refresh " : "\r\nMenu partial refresh ");
-    WakeLogDecimal(static_cast<std::int32_t>(totalMs));
+    // "Shown" is what the user waits for: from the input being handled to
+    // the new image being on the panel. "Done" adds whatever is sent after
+    // that, which delays nothing visible.
+    const std::uint32_t doneMs = HAL_GetTick() - startedMs;
+    const std::uint32_t shownMs = panel.LastRefreshMs() != 0 ? panel.LastRefreshEndedAt() - startedMs : doneMs;
+    WakeLog(firstDraw ? "\r\nMenu full: shown " : "\r\nMenu partial: shown ");
+    WakeLogDecimal(static_cast<std::int32_t>(shownMs));
     WakeLog("ms (panel ");
     WakeLogDecimal(static_cast<std::int32_t>(panel.LastRefreshMs()));
-    WakeLog("ms, transfers ");
-    WakeLogDecimal(static_cast<std::int32_t>(totalMs - panel.LastRefreshMs()));
-    WakeLog(updated ? "ms)" : "ms) FAILED");
+    WakeLog("ms), done ");
+    WakeLogDecimal(static_cast<std::int32_t>(doneMs));
+    WakeLog(updated ? "ms" : "ms FAILED");
     WakeLog(what);
     firstDraw = false;
   };
 
+  // Redraws happen as soon as there is something to show. Turns made while
+  // a refresh is running aren't lost - the encoder is decoded in its
+  // interrupt - so they are all folded into the next redraw: the first click
+  // gets an immediate response, and a fast spin costs two refreshes rather
+  // than one per detent.
   bool redraw = true;
   std::uint32_t lastInputMs = HAL_GetTick();
-  // The opening screen is drawn at once; the quiet period only applies to
-  // changes made from inside the menu.
-  std::uint32_t lastChangeMs = HAL_GetTick() - kMenuRedrawQuietMs;
 
   while (menu.IsOpen())
   {
-    if (redraw && HAL_GetTick() - lastChangeMs >= kMenuRedrawQuietMs)
+    if (redraw)
     {
       drawMenu("");
       redraw = false;
@@ -350,7 +351,6 @@ void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin
     if (detents != 0 || event != Button::Event::None)
     {
       lastInputMs = HAL_GetTick();
-      lastChangeMs = lastInputMs;
       redraw = true;
     }
 
@@ -405,11 +405,8 @@ void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin
 
     if (request.action != MenuAction::None && request.action != MenuAction::Close)
     {
-      // An outcome is worth showing at once rather than after the quiet
-      // period: the user is waiting on it, and no more input is coming.
       redraw = true;
-      lastChangeMs = HAL_GetTick() - kMenuRedrawQuietMs;
-      continue;
+      continue; // show the outcome without waiting for the poll interval
     }
 
     if (HAL_GetTick() - lastInputMs >= kMenuIdleTimeoutMs)

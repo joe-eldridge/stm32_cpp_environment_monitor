@@ -87,8 +87,9 @@ TEST_F(Ssd1681Test, WakeWaitsForSoftwareResetToFinish)
 {
   busyPollsPerOperation = 5;
   ASSERT_TRUE(panel.Wake());
-  // 20 ms of reset pulse + 10 ms settle + 5 busy polls at 10 ms.
-  EXPECT_GE(configTick, 80u);
+  // 20 ms of reset pulse + 10 ms settle + 5 busy polls at 1 ms: the
+  // configuration only goes out once BUSY has cleared.
+  EXPECT_GE(configTick, 35u);
 }
 
 TEST_F(Ssd1681Test, WakeFailsIfBusyNeverClears)

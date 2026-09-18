@@ -87,8 +87,8 @@ bool Ssd1681::Wake()
 
 bool Ssd1681::WriteRam(std::uint8_t ramCommand, const std::uint8_t *image, RowRange rows)
 {
-  // The Y window bounds both the RAM write and the area the next refresh
-  // drives; X stays the full width, as set in Wake().
+  // The Y window bounds the RAM write. X stays the full width, as set in
+  // Wake().
   const std::uint8_t yWindow[] = {static_cast<std::uint8_t>(rows.first & 0xFF),
                                   static_cast<std::uint8_t>(rows.first >> 8),
                                   static_cast<std::uint8_t>(rows.last & 0xFF),
@@ -120,7 +120,8 @@ bool Ssd1681::Refresh(RefreshMode mode)
   }
   const std::uint32_t startedMs = HAL_GetTick();
   const bool ok = WaitUntilIdle(kRefreshTimeoutMs);
-  lastRefreshMs_ = HAL_GetTick() - startedMs;
+  lastRefreshEndedAt_ = HAL_GetTick();
+  lastRefreshMs_ = lastRefreshEndedAt_ - startedMs;
   return ok;
 }
 

@@ -61,8 +61,9 @@ public:
   [[nodiscard]] bool Wake();
 
   // The image to show on the next refresh (BW RAM, command 0x24). `image`
-  // always points at a whole 200x200 image; only `rows` of it are sent, and
-  // the next refresh drives only those rows.
+  // always points at a whole 200x200 image; only `rows` of it are sent.
+  // Sending fewer rows shortens the transfer but not the refresh: measured,
+  // the panel takes the same time whatever the window.
   [[nodiscard]] bool WriteImage(const std::uint8_t *image, RowRange rows = RowRange::All());
 
   // The image currently on the panel (RED RAM, command 0x26). A partial
@@ -78,6 +79,14 @@ public:
   std::uint32_t LastRefreshMs() const
   {
     return lastRefreshMs_;
+  }
+
+  // The tick at which the last refresh finished - the moment the new image
+  // was actually on the panel. Anything sent after it doesn't delay what the
+  // user sees, so it's the end point for measuring responsiveness.
+  std::uint32_t LastRefreshEndedAt() const
+  {
+    return lastRefreshEndedAt_;
   }
 
   // Deep sleep mode 1: about 1 uA, RAM contents kept. Only Wake() exits it.
@@ -112,12 +121,16 @@ private:
 
   // Datasheet operation flow: 10 ms after power-on / reset steps.
   static constexpr std::uint32_t kResetStepMs = 10;
-  static constexpr std::uint32_t kBusyPollMs = 10;
+  // BUSY is sampled this often while waiting. Each wait overshoots by up to
+  // one interval, so a coarse poll adds that much to every reset and every
+  // refresh. The wait sleeps between samples, so polling often costs little.
+  static constexpr std::uint32_t kBusyPollMs = 1;
   static constexpr std::uint32_t kResetTimeoutMs = 1000;
   // A full refresh takes a few seconds; this only bounds a stuck BUSY line.
   static constexpr std::uint32_t kRefreshTimeoutMs = 10000;
 
   std::uint32_t lastRefreshMs_ = 0;
+  std::uint32_t lastRefreshEndedAt_ = 0;
 
   SpiDevice &spi_;
   OutputPin &dataCommand_;
