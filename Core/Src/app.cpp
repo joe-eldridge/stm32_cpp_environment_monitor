@@ -304,9 +304,13 @@ void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin
   bool firstDraw = true;
   const auto drawMenu = [&display, &panel, &menu, &firstDraw](const char *what) {
     const MenuView view = menu.View();
-    // The first draw replaces a whole different screen, so it is full;
-    // moving about within the menu is partial, which is far quicker.
-    const Ssd1681::RefreshMode mode = firstDraw ? Ssd1681::RefreshMode::Full : Ssd1681::RefreshMode::Partial;
+    // Partial throughout, the opening screen included: a full refresh takes
+    // 2.1s against 0.6s, and opening the menu is when someone is waiting on
+    // it most. Ghosting of the main screen behind the menu would be cleared
+    // by the full refresh on the way out; in practice there is none. (If the
+    // panel's contents aren't known, EpaperDisplay upgrades this to full by
+    // itself.)
+    const Ssd1681::RefreshMode mode = Ssd1681::RefreshMode::Partial;
     const std::uint32_t startedMs = HAL_GetTick();
     std::uint32_t drawMs = 0;
     const bool updated = display.Update(mode, [&view, &drawMs](MonoFramebuffer &c) {
@@ -322,7 +326,7 @@ void RunMenu(Ds3231 &rtc, EpaperDisplay &display, const Ssd1681 &panel, InputPin
     // Where "shown" goes: drawing into the framebuffer, waking the panel, the
     // panel's own waveform, and the rest - comparing images and sending rows.
     const std::uint32_t accountedMs = drawMs + panel.LastWakeMs() + panel.LastRefreshMs();
-    WakeLog(firstDraw ? "\r\nMenu full: shown " : "\r\nMenu partial: shown ");
+    WakeLog(firstDraw ? "\r\nMenu open: shown " : "\r\nMenu step: shown ");
     WakeLogDecimal(static_cast<std::int32_t>(shownMs));
     WakeLog("ms = draw ");
     WakeLogDecimal(static_cast<std::int32_t>(drawMs));
