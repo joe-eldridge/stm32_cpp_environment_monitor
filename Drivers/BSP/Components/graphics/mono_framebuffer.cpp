@@ -101,12 +101,40 @@ void MonoFramebuffer::FillRect(int x, int y, int width, int height, Color color)
   const int top = std::max(y, 0);
   const int right = std::min(x + width, static_cast<int>(width_));
   const int bottom = std::min(y + height, static_cast<int>(height_));
+  if (left >= right || top >= bottom)
+  {
+    return;
+  }
+
+  // Whole bytes at a time rather than pixel by pixel: a mask for the partial
+  // byte at each end of a row, and a fill for everything between. On a 2 MHz
+  // core the difference is most of a menu redraw - the selection bar alone
+  // was 4,224 separate SetPixel calls. Nothing outside the rectangle is
+  // touched, including the padding bits at the end of a row.
+  const int firstByte = left / 8;
+  const int lastByte = (right - 1) / 8;
+  const auto firstMask = static_cast<std::uint8_t>(0xFFu >> (left % 8));
+  const auto lastMask = static_cast<std::uint8_t>(0xFFu << (7 - (right - 1) % 8));
+  const bool white = color == Color::White;
+  const std::uint8_t fill = white ? 0xFF : 0x00;
+
+  const auto apply = [white](std::uint8_t &byte, std::uint8_t mask) {
+    byte = white ? static_cast<std::uint8_t>(byte | mask) : static_cast<std::uint8_t>(byte & ~mask);
+  };
 
   for (int row = top; row < bottom; ++row)
   {
-    for (int column = left; column < right; ++column)
+    std::uint8_t *line = buffer_ + static_cast<std::size_t>(row) * bytesPerRow_;
+    if (firstByte == lastByte)
     {
-      SetPixel(column, row, color);
+      apply(line[firstByte], static_cast<std::uint8_t>(firstMask & lastMask));
+      continue;
     }
+    apply(line[firstByte], firstMask);
+    if (lastByte - firstByte > 1)
+    {
+      std::memset(line + firstByte + 1, fill, static_cast<std::size_t>(lastByte - firstByte - 1));
+    }
+    apply(line[lastByte], lastMask);
   }
 }

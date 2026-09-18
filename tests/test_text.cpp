@@ -131,3 +131,51 @@ TEST_F(TextTest, ClipsAtCanvasEdge)
   EXPECT_EQ(DrawText(canvas, kFont5x7, 60, 28, "HH", Color::Black), 70);
   EXPECT_GT(CountBlack(), 0);
 }
+
+// Glyphs are drawn as vertical runs of lit pixels rather than pixel by
+// pixel. Checked against the pixel-by-pixel version for every character in
+// the font, at every scale in use and at every alignment within a byte.
+TEST(TextRendering, MatchesPixelByPixelForEveryGlyphScaleAndAlignment)
+{
+  constexpr std::uint16_t kWidth = 64;
+  constexpr std::uint16_t kHeight = 32;
+  constexpr std::size_t kBytes = MonoFramebuffer::BufferSize(kWidth, kHeight);
+
+  for (int scale = 1; scale <= 3; ++scale)
+  {
+    for (int x = 0; x < 8; ++x)
+    {
+      for (int code = kFont5x7.first; code <= kFont5x7.last; ++code)
+      {
+        std::vector<std::uint8_t> fastMemory(kBytes, 0xFF);
+        std::vector<std::uint8_t> slowMemory(kBytes, 0xFF);
+        MonoFramebuffer fast(fastMemory.data(), kWidth, kHeight);
+        MonoFramebuffer slow(slowMemory.data(), kWidth, kHeight);
+
+        const char text[] = {static_cast<char>(code), '\0'};
+        DrawText(fast, kFont5x7, x, 3, text, Color::Black, scale);
+
+        const std::uint8_t *glyph = kFont5x7.Glyph(static_cast<char>(code));
+        ASSERT_NE(glyph, nullptr);
+        for (int column = 0; column < kFont5x7.width; ++column)
+        {
+          for (int row = 0; row < kFont5x7.height; ++row)
+          {
+            if ((glyph[column] >> row) & 1u)
+            {
+              for (int dy = 0; dy < scale; ++dy)
+              {
+                for (int dx = 0; dx < scale; ++dx)
+                {
+                  slow.SetPixel(x + column * scale + dx, 3 + row * scale + dy, Color::Black);
+                }
+              }
+            }
+          }
+        }
+
+        ASSERT_EQ(fastMemory, slowMemory) << "character " << code << ", scale " << scale << ", x " << x;
+      }
+    }
+  }
+}

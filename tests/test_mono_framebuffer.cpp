@@ -157,3 +157,63 @@ TEST_F(Framebuffer, LinesAreClippedAtEdges)
   canvas.Line(-10, 0, 30, 0, Color::Black);
   EXPECT_EQ(CountBlack(), kWidth);
 }
+
+// FillRect writes whole bytes at a time, with masks for the partial bytes at
+// each end of a row. That is exactly the sort of code that is right for the
+// cases you think of and wrong at one alignment you didn't, so it is checked
+// against the obvious pixel-by-pixel version at every alignment, width and
+// clipping position, over a patterned background so both setting and
+// clearing bits are exercised. The whole buffer is compared, padding bits
+// included: they must never be touched.
+TEST(FramebufferFillRect, MatchesPixelByPixelAtEveryAlignment)
+{
+  constexpr std::uint16_t kWidth = 37; // rows of 5 bytes, 3 of the bits padding
+  constexpr std::uint16_t kHeight = 4;
+  constexpr std::size_t kBytes = MonoFramebuffer::BufferSize(kWidth, kHeight);
+
+  for (const Color color : {Color::Black, Color::White})
+  {
+    for (int x = -10; x < kWidth + 5; ++x)
+    {
+      for (int width = 0; width <= kWidth + 12; ++width)
+      {
+        std::vector<std::uint8_t> fastMemory(kBytes);
+        std::vector<std::uint8_t> slowMemory(kBytes);
+        for (std::size_t i = 0; i < kBytes; ++i)
+        {
+          fastMemory[i] = slowMemory[i] = static_cast<std::uint8_t>(i % 2 == 0 ? 0xA5 : 0x3C);
+        }
+        MonoFramebuffer fast(fastMemory.data(), kWidth, kHeight);
+        MonoFramebuffer slow(slowMemory.data(), kWidth, kHeight);
+
+        fast.FillRect(x, 1, width, 2, color);
+        for (int row = 1; row < 3; ++row)
+        {
+          for (int column = x; column < x + width; ++column)
+          {
+            slow.SetPixel(column, row, color); // clips on its own
+          }
+        }
+
+        ASSERT_EQ(fastMemory, slowMemory) << "x " << x << ", width " << width << ", "
+                                          << (color == Color::Black ? "black" : "white");
+      }
+    }
+  }
+}
+
+TEST(FramebufferFillRect, ClipsVerticallyToo)
+{
+  constexpr std::uint16_t kWidth = 16;
+  constexpr std::uint16_t kHeight = 4;
+  std::vector<std::uint8_t> memory(MonoFramebuffer::BufferSize(kWidth, kHeight), 0xFF);
+  MonoFramebuffer canvas(memory.data(), kWidth, kHeight);
+
+  canvas.FillRect(0, -3, 16, 5, Color::Black); // rows -3..1, only 0 and 1 visible
+  EXPECT_EQ(memory, (std::vector<std::uint8_t>{0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF}));
+
+  canvas.FillRect(0, 3, 16, 10, Color::Black); // off the bottom after row 3
+  EXPECT_EQ(memory[6], 0x00);
+  EXPECT_EQ(memory[7], 0x00);
+  EXPECT_EQ(memory[4], 0xFF); // row 2 untouched
+}

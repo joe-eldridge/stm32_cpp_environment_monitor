@@ -24,14 +24,26 @@ int DrawText(MonoFramebuffer &canvas, const Font &font, int x, int y, const char
     }
     else
     {
+      // Each column of the glyph is drawn as runs of lit pixels, one
+      // rectangle per run rather than one per pixel - most strokes in a
+      // bitmap font are vertical runs, so this is several times fewer calls.
       for (int column = 0; column < font.width; ++column)
       {
-        for (int row = 0; row < font.height; ++row)
+        const unsigned bits = glyph[column];
+        int row = 0;
+        while (row < font.height)
         {
-          if ((glyph[column] >> row) & 1u)
+          if (((bits >> row) & 1u) == 0)
           {
-            canvas.FillRect(x + column * scale, y + row * scale, scale, scale, color);
+            ++row;
+            continue;
           }
+          const int runStart = row;
+          while (row < font.height && ((bits >> row) & 1u) != 0)
+          {
+            ++row;
+          }
+          canvas.FillRect(x + column * scale, y + runStart * scale, scale, (row - runStart) * scale, color);
         }
       }
     }
