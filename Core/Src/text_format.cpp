@@ -55,6 +55,45 @@ bool Centi(char *out, std::size_t size, std::int32_t centi, int decimals)
   return true;
 }
 
+bool Integer(char *out, std::size_t size, std::int32_t value)
+{
+  if (size == 0)
+  {
+    return false;
+  }
+  out[0] = '\0';
+
+  // Unsigned magnitude, so INT32_MIN doesn't overflow when negated.
+  const bool negative = value < 0;
+  std::uint32_t magnitude = negative ? 0u - static_cast<std::uint32_t>(value) : static_cast<std::uint32_t>(value);
+
+  char digits[10];
+  std::size_t count = 0;
+  do
+  {
+    digits[count++] = static_cast<char>('0' + magnitude % 10u);
+    magnitude /= 10u;
+  } while (magnitude != 0);
+
+  const std::size_t length = count + (negative ? 1u : 0u);
+  if (length + 1 > size)
+  {
+    return false;
+  }
+
+  std::size_t pos = 0;
+  if (negative)
+  {
+    out[pos++] = '-';
+  }
+  while (count > 0)
+  {
+    out[pos++] = digits[--count];
+  }
+  out[pos] = '\0';
+  return true;
+}
+
 void TwoDigits(char *out, std::uint8_t value)
 {
   out[0] = static_cast<char>('0' + (value / 10u) % 10u);

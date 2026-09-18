@@ -112,3 +112,38 @@ TEST(TextFormatAppend, StopsAtTheEndOfTheBuffer)
   text_format::Append(out, sizeof(out), "i");
   EXPECT_STREQ(out, "abcd");
 }
+
+TEST(TextFormatInteger, WritesWholeNumbers)
+{
+  char out[12];
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), 0));
+  EXPECT_STREQ(out, "0");
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), 7));
+  EXPECT_STREQ(out, "7");
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), 1234));
+  EXPECT_STREQ(out, "1234");
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), -12));
+  EXPECT_STREQ(out, "-12");
+}
+
+TEST(TextFormatInteger, HandlesTheExtremesOfTheRange)
+{
+  char out[12];
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), 2147483647));
+  EXPECT_STREQ(out, "2147483647");
+  // Negating this in a signed type would overflow.
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), -2147483647 - 1));
+  EXPECT_STREQ(out, "-2147483648");
+}
+
+TEST(TextFormatInteger, RefusesToWriteWhatWillNotFit)
+{
+  char out[4];
+  EXPECT_FALSE(text_format::Integer(out, sizeof(out), 12345));
+  EXPECT_STREQ(out, "");
+  // The sign counts towards the width.
+  EXPECT_FALSE(text_format::Integer(out, sizeof(out), -123));
+  EXPECT_STREQ(out, "");
+  EXPECT_TRUE(text_format::Integer(out, sizeof(out), -12));
+  EXPECT_STREQ(out, "-12");
+}

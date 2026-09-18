@@ -29,6 +29,16 @@ public:
   // tick. Tick wraparound is handled, as in Timeout.
   Event Update(bool pressed, std::uint32_t nowMs);
 
+  // Adopts `pressed` as the current state without reporting anything.
+  //
+  // The class measures a hold from when it saw the press, so it can't tell a
+  // long hold from a press it stopped watching: if the caller blocks for a
+  // second or two, whatever the button did meanwhile is lost, and the next
+  // poll would read the gap as a hold. Callers that block - refreshing an
+  // e-paper panel, say - reset the button afterwards, and on the way in, so
+  // that the press that started them isn't counted twice.
+  void Reset(bool pressed, std::uint32_t nowMs);
+
   // True between an accepted press and its release.
   bool IsPressed() const
   {

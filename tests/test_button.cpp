@@ -130,3 +130,39 @@ TEST(ButtonTest, WorksAcrossTickWraparound)
   EXPECT_EQ(Hold(button, true, now, 50), Button::Event::None);
   EXPECT_EQ(Hold(button, false, now, 50), Button::Event::Click);
 }
+
+TEST(ButtonReset, AdoptsAHeldButtonWithoutReportingAnything)
+{
+  Button button(kDebounceMs, kLongPressMs);
+  std::uint32_t now = 0;
+
+  // The button is already down when watching starts - the press that woke
+  // the device, say. It is neither a click nor a hold of its own.
+  button.Reset(true, now);
+  EXPECT_TRUE(button.IsPressed());
+  EXPECT_EQ(Hold(button, true, now, kLongPressMs + 100), Button::Event::None);
+  EXPECT_EQ(Hold(button, false, now, 50), Button::Event::None);
+
+  // The next press is reported as normal.
+  EXPECT_EQ(Hold(button, true, now, 50), Button::Event::None);
+  EXPECT_EQ(Hold(button, false, now, 50), Button::Event::Click);
+}
+
+TEST(ButtonReset, ATimeGapWhileTheCallerWasBusyIsNotAHold)
+{
+  Button button(kDebounceMs, kLongPressMs);
+  std::uint32_t now = 0;
+
+  Hold(button, true, now, 50); // pressed, and still down
+  ASSERT_TRUE(button.IsPressed());
+
+  // The caller goes away for several seconds - a panel refresh - and the
+  // button is released meanwhile. Resetting on return stops that gap being
+  // read as a hold, which would otherwise fire on the very next poll.
+  now += 4266;
+  button.Reset(false, now);
+  EXPECT_FALSE(button.IsPressed());
+  EXPECT_EQ(Hold(button, false, now, 50), Button::Event::None);
+  EXPECT_EQ(Hold(button, true, now, 50), Button::Event::None);
+  EXPECT_EQ(Hold(button, false, now, 50), Button::Event::Click);
+}

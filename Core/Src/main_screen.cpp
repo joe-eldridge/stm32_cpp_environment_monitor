@@ -120,7 +120,7 @@ MainScreenText BuildMainScreenText(const MainScreenData &data)
   text_format::Copy(text.storage, sizeof(text.storage), data.storageOk ? "SD OK" : "NO SD");
 
   char minutes[4] = "";
-  text_format::Centi(minutes, sizeof(minutes), data.wakeIntervalMinutes * 100, 0);
+  text_format::Integer(minutes, sizeof(minutes), data.wakeIntervalMinutes);
   text_format::Copy(text.interval, sizeof(text.interval), minutes);
   text_format::Append(text.interval, sizeof(text.interval), " min");
 

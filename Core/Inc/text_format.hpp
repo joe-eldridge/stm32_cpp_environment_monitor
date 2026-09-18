@@ -14,6 +14,10 @@ namespace text_format
 // Returns false, leaving `out` empty, if it doesn't fit.
 bool Centi(char *out, std::size_t size, std::int32_t centi, int decimals);
 
+// Writes a whole number: -12 -> "-12". Returns false, leaving `out` empty,
+// if it doesn't fit.
+bool Integer(char *out, std::size_t size, std::int32_t value);
+
 // Writes `value` (0-99) as two digits with a leading zero: 7 -> "07".
 void TwoDigits(char *out, std::uint8_t value);
 

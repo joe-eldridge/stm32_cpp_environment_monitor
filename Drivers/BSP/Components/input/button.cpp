@@ -5,6 +5,18 @@ Button::Button(std::uint16_t debounceMs, std::uint16_t longPressMs)
 {
 }
 
+void Button::Reset(bool pressed, std::uint32_t nowMs)
+{
+  accepted_ = pressed;
+  candidate_ = pressed;
+  timing_ = false;
+  // Already-held counts as reported: a press adopted this way has no click
+  // or hold of its own to give.
+  longPressSent_ = true;
+  changedAtMs_ = nowMs;
+  pressedAtMs_ = nowMs;
+}
+
 Button::Event Button::Update(bool pressed, std::uint32_t nowMs)
 {
   if (pressed != accepted_)
